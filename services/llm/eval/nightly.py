@@ -3,9 +3,13 @@
     python -m services.llm.eval.nightly --baseline eval-results/baseline
     python -m services.llm.eval.nightly --baseline eval-results/baseline --write-baseline
 
-Cheap to run and the only thing that catches a silent break from a model,
-kernel, or vLLM upgrade before the P&L does. Exits non-zero on a regression
-beyond the budget, so cron/CI alerts without extra glue.
+Cheap to run and the only thing that catches a silent break before the P&L does.
+A hosted model makes it more important, not less: the weights behind a slug can
+change without notice. Exits non-zero on a regression beyond the budget, so
+cron/CI alerts without extra glue.
+
+Costs one full golden-set run per task per night. On a cheap model that is
+cents; check the arithmetic before pointing it at anything expensive.
 """
 
 from __future__ import annotations

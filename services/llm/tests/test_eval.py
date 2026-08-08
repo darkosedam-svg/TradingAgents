@@ -191,9 +191,9 @@ def test_gate_b_fails_on_thin_evidence():
 
 
 def test_gate_c_holds_recall_strictly():
-    assert gate_c(recall=0.96, hosted_call_reduction=0.7, labelled_positives=120).passed
-    assert not gate_c(recall=0.94, hosted_call_reduction=0.9, labelled_positives=120).passed
-    assert not gate_c(recall=0.99, hosted_call_reduction=0.4, labelled_positives=120).passed
+    assert gate_c(recall=0.96, frontier_call_reduction=0.7, labelled_positives=120).passed
+    assert not gate_c(recall=0.94, frontier_call_reduction=0.9, labelled_positives=120).passed
+    assert not gate_c(recall=0.99, frontier_call_reduction=0.4, labelled_positives=120).passed
 
 
 def test_gate_d_fails_when_entry_timing_moves():

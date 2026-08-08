@@ -110,9 +110,9 @@ def test_enricher_peek_is_none_for_unknown_keys():
 def pairs(agree: int, disagree: int) -> ShadowLog:
     log = ShadowLog()
     for i in range(agree):
-        log.record(ShadowPair(item_id=f"a{i}", incumbent="bullish", local="bullish"))
+        log.record(ShadowPair(item_id=f"a{i}", incumbent="bullish", candidate="bullish"))
     for i in range(disagree):
-        log.record(ShadowPair(item_id=f"d{i}", incumbent="bullish", local="bearish"))
+        log.record(ShadowPair(item_id=f"d{i}", incumbent="bullish", candidate="bearish"))
     return log
 
 
@@ -138,8 +138,8 @@ def test_shadow_gate_b_blocks_when_a_malformed_response_would_have_voted():
         ShadowPair(
             item_id="bad",
             incumbent="bullish",
-            local=None,
-            local_reason=AbstainReason.SCHEMA_FAIL.value,
+            candidate=None,
+            candidate_reason=AbstainReason.SCHEMA_FAIL.value,
             malformed_propagated=True,
         )
     )
@@ -158,16 +158,16 @@ def test_shadow_log_round_trips_through_disk(tmp_path: Path):
 
 def test_mutual_abstention_counts_as_agreement():
     log = ShadowLog()
-    log.record(ShadowPair(item_id="1", incumbent=None, local=None))
+    log.record(ShadowPair(item_id="1", incumbent=None, candidate=None))
     assert log.agreement_rate == 1.0
 
 
 def test_summarize_disagreements_groups_transitions():
     log = ShadowLog()
-    log.record(ShadowPair(item_id="1", incumbent="bullish", local="bearish"))
-    log.record(ShadowPair(item_id="2", incumbent="bullish", local="bearish"))
-    log.record(ShadowPair(item_id="3", incumbent="bearish", local=None))
-    log.record(ShadowPair(item_id="4", incumbent="neutral", local="neutral"))
+    log.record(ShadowPair(item_id="1", incumbent="bullish", candidate="bearish"))
+    log.record(ShadowPair(item_id="2", incumbent="bullish", candidate="bearish"))
+    log.record(ShadowPair(item_id="3", incumbent="bearish", candidate=None))
+    log.record(ShadowPair(item_id="4", incumbent="neutral", candidate="neutral"))
 
     assert summarize_disagreements(log.pairs) == {
         "bullish -> bearish": 2,
@@ -188,6 +188,6 @@ def test_spot_check_disabled_at_zero_rate():
 
 def test_spot_check_tracks_disagreement_rate():
     check = SpotCheck()
-    check.record(ShadowPair(item_id="1", incumbent="bullish", local="bullish"))
-    check.record(ShadowPair(item_id="2", incumbent="bullish", local="bearish"))
+    check.record(ShadowPair(item_id="1", incumbent="bullish", candidate="bullish"))
+    check.record(ShadowPair(item_id="2", incumbent="bullish", candidate="bearish"))
     assert check.disagreement_rate == 0.5

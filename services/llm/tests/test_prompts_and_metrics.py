@@ -54,7 +54,7 @@ def record(**overrides) -> CallRecord:
     payload = {
         "task": "news_triage",
         "model": "qwen",
-        "source": "local",
+        "source": "primary",
         "latency_s": 1.0,
         "ok": True,
     }
@@ -67,7 +67,7 @@ def test_metrics_snapshot_reports_every_phase_6_series():
     metrics.record(record(prompt_tokens=100, completion_tokens=25, escalated=True))
     metrics.record(record(latency_s=3.0, escalated=False))
     metrics.record(record(abstain_reason=AbstainReason.SCHEMA_FAIL, escalated=True))
-    metrics.record(record(ok=False, source="hosted"))
+    metrics.record(record(ok=False, source="fallback"))
 
     stats = metrics.snapshot()["news_triage"]
 
@@ -75,7 +75,7 @@ def test_metrics_snapshot_reports_every_phase_6_series():
     assert stats["error_rate"] == 0.25
     assert stats["parse_failure_rate"] == 0.25
     assert stats["abstain_rate"] == 0.25
-    assert stats["hosted_share"] == 0.25
+    assert stats["fallback_share"] == 0.25
     assert stats["escalation_rate"] == pytest.approx(2 / 3)
     assert stats["total_tokens"] == 125
     assert stats["p50_latency_s"] > 0

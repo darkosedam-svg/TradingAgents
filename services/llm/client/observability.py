@@ -19,11 +19,11 @@ from ..schemas.base import AbstainReason
 
 @dataclass(frozen=True)
 class CallRecord:
-    """One local-or-hosted inference call, whatever its outcome."""
+    """One inference call, whatever its outcome."""
 
     task: str
     model: str
-    source: str  # "local" | "hosted"
+    source: str  # "primary" | "fallback" | "unavailable"
     latency_s: float
     ok: bool
     prompt_tokens: int = 0
@@ -76,7 +76,7 @@ class TaskStats:
     abstentions: int = 0
     escalations: int = 0
     escalation_decisions: int = 0
-    hosted_calls: int = 0
+    fallback_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latencies: deque[float] = field(default_factory=lambda: deque(maxlen=5000))
@@ -90,7 +90,7 @@ class TaskStats:
             "parse_failure_rate": self.parse_failures / calls,
             "abstain_rate": self.abstentions / calls,
             "abstain_by_reason": dict(self.abstain_by_reason),
-            "hosted_share": self.hosted_calls / calls,
+            "fallback_share": self.fallback_calls / calls,
             "escalation_rate": (
                 self.escalations / self.escalation_decisions
                 if self.escalation_decisions
@@ -122,8 +122,8 @@ class InMemoryMetrics:
         stats.latencies.append(record.latency_s)
         stats.prompt_tokens += record.prompt_tokens
         stats.completion_tokens += record.completion_tokens
-        if record.source == "hosted":
-            stats.hosted_calls += 1
+        if record.source == "fallback":
+            stats.fallback_calls += 1
         if not record.ok:
             stats.errors += 1
         if record.parse_failure:

@@ -23,24 +23,24 @@ class ShadowPair:
 
     item_id: str
     incumbent: Optional[str]  # the direction voted, or None for an abstention
-    local: Optional[str]
-    local_reason: Optional[str] = None
+    candidate: Optional[str]
+    candidate_reason: Optional[str] = None
     incumbent_reason: Optional[str] = None
-    # True when the local response failed its schema *and* the consumer would
-    # have voted on it anyway. This must stay at zero: it is the exact failure
-    # the abstention machinery exists to prevent.
+    # True when the candidate response failed its schema *and* the consumer
+    # would have voted on it anyway. This must stay at zero: it is the exact
+    # failure the abstention machinery exists to prevent.
     malformed_propagated: bool = False
     note: str = ""
 
     @property
     def agrees(self) -> bool:
-        if self.incumbent is None and self.local is None:
+        if self.incumbent is None and self.candidate is None:
             return True
-        return self.incumbent is not None and self.incumbent == self.local
+        return self.incumbent is not None and self.incumbent == self.candidate
 
 
 class ShadowLog:
-    """Accumulates paired votes and answers "can local go primary yet?"."""
+    """Accumulates paired votes and answers "can the candidate go primary yet?"."""
 
     def __init__(self) -> None:
         self.pairs: list[ShadowPair] = []
@@ -54,16 +54,16 @@ class ShadowLog:
         self,
         item_id: str,
         incumbent_direction: Optional[str],
-        local_direction: Optional[str],
-        local_reason: Optional[AbstainReason] = None,
+        candidate_direction: Optional[str],
+        candidate_reason: Optional[AbstainReason] = None,
         malformed_propagated: bool = False,
     ) -> None:
         self.record(
             ShadowPair(
                 item_id=item_id,
                 incumbent=incumbent_direction,
-                local=local_direction,
-                local_reason=local_reason.value if local_reason else None,
+                candidate=candidate_direction,
+                candidate_reason=candidate_reason.value if candidate_reason else None,
                 malformed_propagated=malformed_propagated,
             )
         )
@@ -71,12 +71,12 @@ class ShadowLog:
     @property
     def agreement_rate(self) -> float:
         return agreement(
-            (p.incumbent for p in self.pairs), (p.local for p in self.pairs)
+            (p.incumbent for p in self.pairs), (p.candidate for p in self.pairs)
         )
 
     @property
     def disagreements(self) -> list[ShadowPair]:
-        """The set a human actually reads before flipping local to primary."""
+        """The set a human actually reads before flipping the candidate to primary."""
         return [p for p in self.pairs if not p.agrees]
 
     @property
@@ -113,11 +113,13 @@ class ShadowLog:
 
 @dataclass
 class SpotCheck:
-    """Phase 6's slow-moving quality signal: re-run 1–2% of local calls hosted.
+    """Phase 6's slow-moving quality signal: re-run 1–2% of triage calls on a
+    frontier model.
 
     Not a gate and not an alert on any single sample — the number worth watching
     is the disagreement rate's trend across weeks. A step change in it is the
-    cheapest early warning that something upstream moved.
+    cheapest early warning that something upstream moved, and against a hosted
+    triage model "upstream" includes changes you were never told about.
     """
 
     sample_rate: float = 0.015
@@ -141,12 +143,12 @@ class SpotCheck:
 
 
 def summarize_disagreements(pairs: Iterable[ShadowPair]) -> dict[str, int]:
-    """Counts by ``incumbent -> local`` transition, for the manual review pass."""
+    """Counts by ``incumbent -> candidate`` transition, for the manual review pass."""
     counts: dict[str, int] = {}
     for pair in pairs:
         if pair.agrees:
             continue
-        key = f"{pair.incumbent or 'abstain'} -> {pair.local or 'abstain'}"
+        key = f"{pair.incumbent or 'abstain'} -> {pair.candidate or 'abstain'}"
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
 

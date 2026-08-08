@@ -5,9 +5,9 @@ safe, so it is built to be runnable before any integration exists: point it at
 an endpoint, give it a task, get a JSON result file that ``report.py`` and
 ``gates.py`` consume.
 
-    python -m services.llm.eval.harness --task sentiment --label candidate-awq
-    python -m services.llm.eval.harness --task sentiment --label reference-fp16 \\
-        --base-url http://localhost:8001/v1 --model Qwen/Qwen2.5-14B-Instruct
+    python -m services.llm.eval.harness --task sentiment --label candidate-cheap
+    python -m services.llm.eval.harness --task sentiment --label reference-frontier \\
+        --model anthropic/claude-sonnet-4.5
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence, Type
 
-from ..client.client import LLMClient, LocalUnavailable
+from ..client.client import LLMClient, UpstreamUnavailable
 from ..client.config import LLMSettings
 from ..schemas.base import TaskOutput
 from ..schemas.news import NewsTriage
@@ -119,7 +119,7 @@ async def run_item(
             render_input(task, item.payload),
             min_confidence=confidence_floor,
         )
-    except LocalUnavailable as exc:
+    except UpstreamUnavailable as exc:
         return RunItem(
             item_id=item.item_id,
             expected=item.expected,
@@ -220,7 +220,7 @@ async def evaluate(
 def _cli(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True, choices=sorted(TASK_SCHEMAS))
-    parser.add_argument("--label", required=True, help="e.g. candidate-awq, reference-fp16")
+    parser.add_argument("--label", required=True, help="e.g. candidate-cheap, reference-frontier")
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--model", default=None)
     parser.add_argument("--golden", default=None, type=Path)

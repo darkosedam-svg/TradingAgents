@@ -9,7 +9,7 @@ from services.llm.client import (
     EscalationRateMonitor,
     LLMClient,
     LLMSettings,
-    LocalUnavailable,
+    UpstreamUnavailable,
     Router,
     TaskBudget,
 )
@@ -18,8 +18,8 @@ from services.llm.schemas import AbstainReason, NewsTriage, Outcome, SentimentVo
 from .test_client import completion
 
 
-class HostedStub:
-    """Stands in for the Anthropic/OpenAI fallback."""
+class FallbackStub:
+    """Stands in for the second provider."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -27,11 +27,11 @@ class HostedStub:
     async def complete(self, task, schema, user_content, **kwargs):
         self.calls.append((task, user_content))
         return Outcome.voted(
-            SentimentVote(sentiment="neutral", confidence=0.9), source="hosted"
+            SentimentVote(sentiment="neutral", confidence=0.9), source="fallback"
         )
 
 
-def dead_local() -> LLMClient:
+def dead_endpoint() -> LLMClient:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
 
@@ -41,7 +41,7 @@ def dead_local() -> LLMClient:
     )
 
 
-def live_local(payload: dict) -> LLMClient:
+def live_endpoint(payload: dict) -> LLMClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=completion(payload))
 
@@ -50,35 +50,35 @@ def live_local(payload: dict) -> LLMClient:
     )
 
 
-def test_router_falls_back_to_hosted_when_local_is_down():
-    hosted = HostedStub()
-    router = Router(dead_local(), hosted)
+def test_router_falls_back_to_the_second_provider_when_the_first_is_down():
+    fallback = FallbackStub()
+    router = Router(dead_endpoint(), fallback)
 
     outcome = asyncio.run(router.run("sentiment", SentimentVote, "headline"))
 
-    assert outcome.source == "hosted"
-    assert hosted.calls == [("sentiment", "headline")]
+    assert outcome.source == "fallback"
+    assert fallback.calls == [("sentiment", "headline")]
 
 
-def test_router_abstains_when_local_is_down_and_there_is_no_fallback():
-    router = Router(dead_local())
+def test_router_abstains_when_the_endpoint_is_down_and_there_is_no_fallback():
+    router = Router(dead_endpoint())
     outcome = asyncio.run(router.run("sentiment", SentimentVote, "headline"))
 
     assert outcome.reason is AbstainReason.INSUFFICIENT_DATA
-    assert "local unavailable" in outcome.detail
+    assert "upstream unavailable" in outcome.detail
 
 
 def test_router_can_be_told_to_raise_instead_of_abstaining():
-    router = Router(dead_local(), abstain_on_unavailable=False)
-    with pytest.raises(LocalUnavailable):
+    router = Router(dead_endpoint(), abstain_on_unavailable=False)
+    with pytest.raises(UpstreamUnavailable):
         asyncio.run(router.run("sentiment", SentimentVote, "headline"))
 
 
 def test_router_charges_the_ledger_and_falls_back_once_it_is_spent():
-    hosted = HostedStub()
+    fallback = FallbackStub()
     ledger = BudgetLedger(budgets={"sentiment": TaskBudget(max_tokens_per_day=100)})
     router = Router(
-        live_local(
+        live_endpoint(
             {
                 "sentiment": "bullish",
                 "confidence": 0.9,
@@ -87,7 +87,7 @@ def test_router_charges_the_ledger_and_falls_back_once_it_is_spent():
                 "insufficient_data": False,
             }
         ),
-        hosted,
+        fallback,
         ledger=ledger,
     )
 
@@ -98,9 +98,9 @@ def test_router_charges_the_ledger_and_falls_back_once_it_is_spent():
 
     first, second = asyncio.run(scenario())
 
-    assert first.source == "local"
+    assert first.source == "primary"
     assert ledger.spent("sentiment")[0] == 120
-    assert second.source == "hosted"  # budget exhausted, routed out
+    assert second.source == "fallback"  # budget exhausted, routed out
 
 
 def triage(**overrides) -> Outcome[NewsTriage]:

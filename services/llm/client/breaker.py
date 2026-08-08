@@ -1,9 +1,9 @@
-"""Circuit breaker guarding the local endpoint.
+"""Circuit breaker guarding the primary endpoint.
 
-The failure this exists for is not a crash — it is the GPU being busy, the
-container being restarted after a driver upgrade, or a cold start landing in the
-middle of a decision. In all three the right answer is the same: stop paying the
-timeout, route to the hosted API, and probe again later.
+The failure this exists for is not a crash — it is a provider having a bad ten
+minutes, a rate limit that will not clear on the next call, or a model slug
+retired out from under us. In all three the right answer is the same: stop
+paying the timeout, route to the fallback provider, and probe again later.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from typing import Callable
 
 
 class BreakerState(str, Enum):
-    CLOSED = "closed"  # local endpoint in use
-    OPEN = "open"  # tripped, everything goes hosted
+    CLOSED = "closed"  # primary endpoint in use
+    OPEN = "open"  # tripped, everything goes to the fallback
     HALF_OPEN = "half_open"  # cooldown expired, next call is a probe
 
 
@@ -55,8 +55,8 @@ class CircuitBreaker:
     def consecutive_failures(self) -> int:
         return self._failures
 
-    def allows_local(self) -> bool:
-        """True when the caller should try the local endpoint."""
+    def allows_calls(self) -> bool:
+        """True when the caller should try the primary endpoint."""
         return self.state is not BreakerState.OPEN
 
     def record_success(self) -> None:

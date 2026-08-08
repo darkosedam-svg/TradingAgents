@@ -1,7 +1,7 @@
 import pytest
 
 from services.llm.client.breaker import BreakerState, CircuitBreaker
-from services.llm.client.budget import BudgetExceeded, BudgetLedger, TaskBudget
+from services.llm.client.budget import BudgetExceeded, BudgetLedger, Pricing, TaskBudget
 
 
 class FakeClock:
@@ -20,11 +20,11 @@ def test_breaker_trips_only_after_the_threshold():
 
     breaker.record_failure()
     breaker.record_failure()
-    assert breaker.allows_local()
+    assert breaker.allows_calls()
 
     breaker.record_failure()
     assert breaker.state is BreakerState.OPEN
-    assert not breaker.allows_local()
+    assert not breaker.allows_calls()
 
 
 def test_success_resets_the_failure_run():
@@ -32,7 +32,7 @@ def test_success_resets_the_failure_run():
     breaker.record_failure()
     breaker.record_success()
     breaker.record_failure()
-    assert breaker.allows_local()
+    assert breaker.allows_calls()
 
 
 def test_breaker_half_opens_after_cooldown_and_closes_on_a_good_probe():
@@ -45,7 +45,7 @@ def test_breaker_half_opens_after_cooldown_and_closes_on_a_good_probe():
 
     clock.advance(2)
     assert breaker.state is BreakerState.HALF_OPEN
-    assert breaker.allows_local()
+    assert breaker.allows_calls()
 
     breaker.record_success()
     assert breaker.state is BreakerState.CLOSED
@@ -119,3 +119,54 @@ def test_unlimited_budget_never_blocks():
 def test_unknown_task_falls_back_to_the_default_budget():
     ledger = BudgetLedger(clock=FakeClock())
     assert ledger.budget_for("brand-new-task") is ledger.default
+
+
+def test_ledger_tracks_dollars_when_pricing_is_configured():
+    ledger = BudgetLedger(
+        budgets={"t": TaskBudget(max_usd_per_day=0.01)},
+        pricing=Pricing(prompt_per_1m=0.30, completion_per_1m=1.20),
+        clock=FakeClock(),
+    )
+
+    ledger.check("t")
+    ledger.charge("t", 11_000, prompt_tokens=10_000, completion_tokens=1_000)
+
+    # 10k prompt @ $0.30/M + 1k completion @ $1.20/M = $0.0030 + $0.0012
+    assert ledger.spent_usd("t") == pytest.approx(0.0042)
+    ledger.check("t")
+
+    ledger.charge("t", 22_000, prompt_tokens=20_000, completion_tokens=2_000)
+    with pytest.raises(BudgetExceeded, match="spent today"):
+        ledger.check("t")
+
+
+def test_cost_is_not_tracked_without_pricing():
+    ledger = BudgetLedger(budgets={"t": TaskBudget(max_usd_per_day=0.01)}, clock=FakeClock())
+    ledger.charge("t", 999_999, prompt_tokens=999_999)
+    assert ledger.spent_usd("t") == 0.0
+    ledger.check("t")
+
+
+def test_spent_usd_aggregates_across_tasks():
+    ledger = BudgetLedger(
+        pricing=Pricing(prompt_per_1m=1.0, completion_per_1m=1.0), clock=FakeClock()
+    )
+    ledger.charge("sentiment", 1_000_000, prompt_tokens=1_000_000)
+    ledger.charge("news_triage", 1_000_000, prompt_tokens=1_000_000)
+    assert ledger.spent_usd() == pytest.approx(2.0)
+
+
+def test_usd_budget_rolls_over_with_the_day():
+    clock = FakeClock(now=1_700_000_000.0)
+    ledger = BudgetLedger(
+        budgets={"t": TaskBudget(max_usd_per_day=0.001)},
+        pricing=Pricing(prompt_per_1m=1000.0),
+        clock=clock,
+    )
+    ledger.charge("t", 1_000, prompt_tokens=1_000)
+    with pytest.raises(BudgetExceeded):
+        ledger.check("t")
+
+    clock.advance(86_400)
+    ledger.check("t")
+    assert ledger.spent_usd("t") == 0.0

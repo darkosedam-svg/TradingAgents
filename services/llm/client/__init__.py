@@ -1,18 +1,19 @@
-"""Client, routing, and budget primitives for the local inference layer."""
+"""Client, routing, and budget primitives for the triage inference layer."""
 
 from .advisory import AdvisoryEnricher, with_deadline
 from .breaker import BreakerState, CircuitBreaker
-from .budget import BudgetExceeded, BudgetLedger, TaskBudget
-from .client import LLMClient, LocalUnavailable
-from .config import LLMSettings
+from .budget import BudgetExceeded, BudgetLedger, Pricing, TaskBudget
+from .client import LLMClient, UpstreamUnavailable, extract_json
+from .config import LLMSettings, StructuredMode
 from .observability import CallRecord, InMemoryMetrics, MetricsSink, NullMetrics
 from .router import (
     EscalationDecision,
     EscalationPolicy,
     EscalationRateMonitor,
-    HostedBackend,
+    FallbackBackend,
     Router,
 )
+from .schema_tools import json_schema_for, response_format_for, schema_hint
 from .shadow import ShadowLog, ShadowPair, SpotCheck
 
 __all__ = [
@@ -25,17 +26,23 @@ __all__ = [
     "EscalationDecision",
     "EscalationPolicy",
     "EscalationRateMonitor",
-    "HostedBackend",
+    "FallbackBackend",
     "InMemoryMetrics",
     "LLMClient",
     "LLMSettings",
-    "LocalUnavailable",
     "MetricsSink",
     "NullMetrics",
+    "Pricing",
     "Router",
     "ShadowLog",
     "ShadowPair",
     "SpotCheck",
+    "StructuredMode",
     "TaskBudget",
+    "UpstreamUnavailable",
+    "extract_json",
+    "json_schema_for",
+    "response_format_for",
+    "schema_hint",
     "with_deadline",
 ]

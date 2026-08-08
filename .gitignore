@@ -218,6 +218,5 @@ __marimo__/
 # Cache
 **/data_cache/
 
-# Local inference layer: eval runs and shadow logs are local artifacts
+# Triage inference layer: eval runs and shadow logs are local artifacts
 eval-results/
-services/llm/docker/.env

@@ -1,8 +1,8 @@
-"""FP16-vs-quant diff table.
+"""Cheap-vs-frontier diff table.
 
     python -m services.llm.eval.report \\
-        eval-results/sentiment.reference-fp16.json \\
-        eval-results/sentiment.candidate-awq.json
+        eval-results/sentiment.reference-frontier.json \\
+        eval-results/sentiment.candidate-cheap.json
 
 Prints a markdown table and the Gate A verdict, and exits non-zero when the gate
 fails — so it drops straight into a nightly job without extra glue.

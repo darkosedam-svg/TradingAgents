@@ -10,7 +10,7 @@ from services.llm.client import (
     InMemoryMetrics,
     LLMClient,
     LLMSettings,
-    LocalUnavailable,
+    UpstreamUnavailable,
 )
 from services.llm.schemas import AbstainReason, SentimentVote
 
@@ -64,9 +64,11 @@ def test_happy_path_returns_a_vote():
     assert outcome.prompt_tokens == 100 and outcome.completion_tokens == 20
     assert outcome.prompt_sha.startswith("sentiment.v1@")
 
-    # Every call is schema-constrained; nothing goes out without guided_json.
+    # Every call is schema-constrained; nothing goes out unconstrained.
     body = seen[0]
-    assert body["guided_json"]["properties"]["sentiment"]
+    schema = body["response_format"]["json_schema"]
+    assert schema["strict"] is True
+    assert schema["schema"]["properties"]["sentiment"]
     assert body["temperature"] == 0.0
     assert body["messages"][0]["role"] == "system"
 
@@ -124,6 +126,21 @@ def test_insufficient_data_flag_wins_over_high_confidence():
     assert outcome.reason is AbstainReason.INSUFFICIENT_DATA
 
 
+def test_rate_limit_is_retried_like_a_server_error():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, text="slow down")
+
+    with pytest.raises(UpstreamUnavailable):
+        asyncio.run(_one_call(make_client(handler)))
+
+    # A 429 means the request was fine and the timing was not - the one 4xx
+    # worth a second attempt.
+    assert calls["n"] == 2
+
+
 def test_server_error_is_retried_once_then_raises_and_trips_the_breaker():
     calls = {"n": 0}
 
@@ -139,7 +156,7 @@ def test_server_error_is_retried_once_then_raises_and_trips_the_breaker():
         breaker=breaker,
     )
 
-    with pytest.raises(LocalUnavailable):
+    with pytest.raises(UpstreamUnavailable):
         asyncio.run(_one_call(client))
 
     assert calls["n"] == 2  # one attempt plus one retry
@@ -158,7 +175,7 @@ def test_client_refuses_to_call_while_the_breaker_is_open():
         breaker=breaker,
     )
 
-    with pytest.raises(LocalUnavailable, match="circuit breaker open"):
+    with pytest.raises(UpstreamUnavailable, match="circuit breaker open"):
         asyncio.run(_one_call(client))
 
 
@@ -169,7 +186,7 @@ def test_client_errors_are_not_retried():
         calls["n"] += 1
         return httpx.Response(422, text="bad guided_json")
 
-    with pytest.raises(LocalUnavailable, match="request rejected"):
+    with pytest.raises(UpstreamUnavailable, match="request rejected"):
         asyncio.run(_one_call(make_client(handler)))
 
     assert calls["n"] == 1
@@ -182,7 +199,7 @@ def test_timeout_is_retried_then_surfaces_as_unavailable():
         calls["n"] += 1
         raise httpx.ReadTimeout("too slow", request=request)
 
-    with pytest.raises(LocalUnavailable):
+    with pytest.raises(UpstreamUnavailable):
         asyncio.run(_one_call(make_client(handler)))
 
     assert calls["n"] == 2

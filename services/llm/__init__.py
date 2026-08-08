@@ -1,9 +1,10 @@
-"""Local quantized inference layer for warm-path agents.
+"""Cheap-model triage layer for warm-path agents.
 
 Serves sentiment, news/text triage, structured extraction, and escalation
-routing from a local vLLM endpoint, with a hosted API as the fallback path.
-Never enters an execution lane; see ``README.md`` for the non-goals that make
-that a property of the code rather than a promise.
+routing from a small, cheap model over an OpenAI-compatible endpoint, reserving
+frontier calls for what survives triage. Never enters an execution lane; see
+``README.md`` for the non-goals that make that a property of the code rather
+than a promise.
 """
 
 from . import prompts
@@ -15,8 +16,9 @@ from .client import (
     InMemoryMetrics,
     LLMClient,
     LLMSettings,
-    LocalUnavailable,
+    Pricing,
     Router,
+    UpstreamUnavailable,
 )
 from .schemas import (
     AbstainReason,
@@ -36,12 +38,13 @@ __all__ = [
     "InMemoryMetrics",
     "LLMClient",
     "LLMSettings",
-    "LocalUnavailable",
     "NewsTriage",
     "Outcome",
     "ParsedSignal",
+    "Pricing",
     "Router",
     "SentimentVote",
     "TokenNarrativeFlags",
+    "UpstreamUnavailable",
     "prompts",
 ]

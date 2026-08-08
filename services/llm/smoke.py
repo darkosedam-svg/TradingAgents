@@ -5,12 +5,16 @@
 
 Asserts the two numbers Phase 1 is accepted on:
 
-* p95 < 2.5s for a ~200-token structured response at 20 concurrent
+* p95 under the latency ceiling at 20 concurrent
 * 100% JSON parse rate
 
-Exits non-zero if either fails, so it drops into CI or a post-upgrade check.
-Note the second one is about *parsing*, not about being right: a run can be 100%
-parseable and still fail Gate A. This test says the substrate works, nothing more.
+Exits non-zero if either fails, so it drops into CI or a post-provider-change
+check. Note the second one is about *parsing*, not about being right: a run can
+be 100% parseable and still fail Gate A. This test says the endpoint works and
+the structured-output mode is wired correctly, nothing more.
+
+It costs real money now — 100 calls against a cheap model is fractions of a
+cent, but check --n before pointing it at a frontier model.
 """
 
 from __future__ import annotations
@@ -20,14 +24,14 @@ import asyncio
 import time
 from typing import Optional, Sequence
 
-from .client.client import LLMClient, LocalUnavailable
+from .client.client import LLMClient, UpstreamUnavailable
 from .client.config import LLMSettings
 from .client.observability import InMemoryMetrics, percentile
 from .schemas.base import AbstainReason
 from .schemas.sentiment import SentimentVote
 
-# Varied so prefix caching is exercised on the shared system preamble without
-# every request being an identical cache hit, which would flatter the numbers.
+# Varied so the run exercises real decoding rather than becoming a provider-side
+# cache hit on an identical prompt, which would flatter the latency numbers.
 SAMPLES = [
     "Spot ETH ETF inflows hit $310m on Tuesday, the largest single day since launch.",
     "Binance will delist four spot pairs on March 14, citing low liquidity.",
@@ -46,7 +50,10 @@ async def _run(n: int, concurrency: int, settings: LLMSettings) -> tuple[list[fl
     async with LLMClient(settings, metrics=metrics) as client:
         print("warming...", flush=True)
         if not await client.warm():
-            raise SystemExit("warm() failed — is the container up and the model loaded?")
+            raise SystemExit(
+                "warm() failed — check the API key, the base URL, and that the "
+                f"model slug {settings.model!r} still exists"
+            )
 
         async def one(index: int) -> None:
             nonlocal parsed, errors, abstained
@@ -55,7 +62,7 @@ async def _run(n: int, concurrency: int, settings: LLMSettings) -> tuple[list[fl
                     outcome = await client.complete(
                         "sentiment", SentimentVote, SAMPLES[index % len(SAMPLES)]
                     )
-                except LocalUnavailable as exc:
+                except UpstreamUnavailable as exc:
                     errors += 1
                     print(f"  call {index}: {exc}")
                     return
@@ -80,7 +87,7 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--concurrency", type=int, default=20)
-    parser.add_argument("--max-p95", type=float, default=2.5)
+    parser.add_argument("--max-p95", type=float, default=8.0)
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--model", default=None)
     args = parser.parse_args(argv)

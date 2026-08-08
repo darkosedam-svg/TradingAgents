@@ -49,11 +49,15 @@ def gate_a(
     min_valid_at_1: float = 0.99,
     false_confidence_slack: float = 0.0,
 ) -> GateResult:
-    """Quant-vs-reference parity on a golden set.
+    """Triage-model-vs-reference parity on a golden set.
 
-    Failure means step *up* in precision (INT8/FP8) or drop to a smaller model
-    at higher precision. It never means stepping down to 3-bit, and it never
-    means widening ``max_delta``.
+    ``reference`` is a frontier model run over the same items; ``candidate`` is
+    the cheap model you want doing triage. The question is whether the cheap
+    model is good enough to stand between your candidate stream and an expensive
+    call — and this is the measurement that answers it.
+
+    Failure means try a *better* cheap model, or a bigger one from the same
+    family. It never means widening ``max_delta`` until the run goes green.
 
     ``false_confidence_slack`` defaults to 0.0, which is the criterion as
     written: the candidate may not be confidently wrong more often than the
@@ -124,7 +128,11 @@ def gate_b(
     min_agreement: float = 0.90,
     min_pairs: int = 500,
 ) -> GateResult:
-    """Shadow-mode parity for the sentiment specialist before it votes."""
+    """Shadow-mode parity for the sentiment specialist before it votes.
+
+    Same shape whether the incumbent is a frontier model or a human: run both
+    over the same decisions, change nothing live, and read the disagreement rate.
+    """
     result = GateResult(gate="B (sentiment shadow)")
     result.checks.append(
         Check(
@@ -156,7 +164,7 @@ def gate_b(
     )
     result.checks.append(
         Check(
-            "local not systematically worse",
+            "triage model not systematically worse",
             not systematically_worse,
             "manual review verdict on the disagreement set",
         )
@@ -167,7 +175,7 @@ def gate_b(
 def gate_c(
     *,
     recall: float,
-    hosted_call_reduction: float,
+    frontier_call_reduction: float,
     labelled_positives: int = 0,
     min_recall: float = 0.95,
     min_reduction: float = 0.60,
@@ -188,9 +196,9 @@ def gate_c(
     )
     result.checks.append(
         Check(
-            "hosted call reduction vs Phase 0 baseline",
-            hosted_call_reduction >= min_reduction,
-            f"{hosted_call_reduction:.4f} (floor {min_reduction:.2f})",
+            "frontier call reduction vs Phase 0 baseline",
+            frontier_call_reduction >= min_reduction,
+            f"{frontier_call_reduction:.4f} (floor {min_reduction:.2f})",
         )
     )
     result.checks.append(
@@ -252,8 +260,10 @@ def drift_check(
 ) -> GateResult:
     """Nightly golden-set re-run against the live model (Phase 6).
 
-    Cheap, and it is the only thing that catches a silent break from a model,
-    kernel, or vLLM upgrade before the P&L does.
+    Cheap, and it is the only thing that catches a silent break before the P&L
+    does. A hosted model makes this *more* important, not less: the weights
+    behind a slug can change without notice, a provider can reroute you to a
+    different backend, and neither event announces itself.
     """
     result = GateResult(gate=f"drift ({current.task})")
     for name, base, now in (

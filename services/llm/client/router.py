@@ -1,13 +1,13 @@
-"""Routing: local first, hosted on failure, and the escalation policy itself.
+"""Routing: the triage tier first, a fallback on failure, and escalation itself.
 
 Two distinct decisions live here and are deliberately kept apart:
 
-*Fallback* — the local endpoint is down or over budget, so this call goes to the
-hosted API instead. An availability decision.
+*Fallback* — the primary endpoint is down or over budget, so this call goes to a
+second provider instead. An availability decision, and a cheap one.
 
-*Escalation* — the local model answered fine, and its answer says this candidate
-is worth an expensive frontier call. A value decision, and the one the whole
-layer is built to make: it converts a hosted bill that scales with candidates
+*Escalation* — the triage model answered fine, and its answer says this
+candidate is worth an expensive frontier call. A value decision, and the one the
+whole layer is built to make: it converts a bill that scales with candidates
 into one that scales with finalists.
 """
 
@@ -19,13 +19,13 @@ from typing import Any, Optional, Protocol, Type, TypeVar
 from ..schemas.base import AbstainReason, Outcome, TaskOutput
 from ..schemas.news import NewsTriage
 from .budget import BudgetExceeded, BudgetLedger
-from .client import LLMClient, LocalUnavailable
+from .client import LLMClient, UpstreamUnavailable
 
 T = TypeVar("T", bound=TaskOutput)
 
 
-class HostedBackend(Protocol):
-    """Anything that can answer a task when the local endpoint cannot."""
+class FallbackBackend(Protocol):
+    """Anything that can answer a task when the primary endpoint cannot."""
 
     async def complete(
         self, task: str, schema: Type[T], user_content: str, **kwargs: Any
@@ -33,18 +33,18 @@ class HostedBackend(Protocol):
 
 
 class Router:
-    """Runs a task locally, falling back to a hosted backend on unavailability."""
+    """Runs a task on the primary endpoint, falling back on unavailability."""
 
     def __init__(
         self,
-        local: LLMClient,
-        hosted: Optional[HostedBackend] = None,
+        primary: LLMClient,
+        fallback: Optional[FallbackBackend] = None,
         *,
         ledger: Optional[BudgetLedger] = None,
         abstain_on_unavailable: bool = True,
     ) -> None:
-        self.local = local
-        self.hosted = hosted
+        self.primary = primary
+        self.fallback = fallback
         self.ledger = ledger or BudgetLedger()
         self.abstain_on_unavailable = abstain_on_unavailable
 
@@ -61,31 +61,35 @@ class Router:
             return await self._fallback(task, schema, user_content, str(exc), **kwargs)
 
         try:
-            outcome = await self.local.complete(task, schema, user_content, **kwargs)
-        except LocalUnavailable as exc:
+            outcome = await self.primary.complete(task, schema, user_content, **kwargs)
+        except UpstreamUnavailable as exc:
             return await self._fallback(task, schema, user_content, str(exc), **kwargs)
 
-        self.ledger.charge(task, outcome.total_tokens)
+        self.ledger.charge(
+            task,
+            outcome.total_tokens,
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+        )
         return outcome
 
     async def _fallback(
         self, task: str, schema: Type[T], user_content: str, why: str, **kwargs: Any
     ) -> Outcome[T]:
-        if self.hosted is None:
+        if self.fallback is None:
             if not self.abstain_on_unavailable:
-                raise LocalUnavailable(why)
-            # No local answer and no hosted backend: there is no data to vote
-            # on. Abstaining is the same guardrail INSUFFICIENT_DATA already
-            # encodes, so it inherits those semantics rather than inventing new
-            # ones for the consumer to handle.
+                raise UpstreamUnavailable(why)
+            # No answer and no fallback: there is no data to vote on. Abstaining
+            # is the same guardrail INSUFFICIENT_DATA already encodes, so it
+            # inherits those semantics rather than inventing new ones for the
+            # consumer to handle.
             return Outcome.abstain(
                 AbstainReason.INSUFFICIENT_DATA,
-                detail=f"local unavailable: {why}",
+                detail=f"upstream unavailable: {why}",
                 source="unavailable",
             )
 
-        outcome = await self.hosted.complete(task, schema, user_content, **kwargs)
-        return outcome
+        return await self.fallback.complete(task, schema, user_content, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -98,7 +102,7 @@ class EscalationPolicy:
 
     priority_threshold: float = 0.35
     relevance_threshold: float = 0.30
-    # An abstention means the local model could not read the item. That is the
+    # An abstention means the triage model could not read the item. That is the
     # worst possible moment to silently drop it.
     escalate_on_abstain: bool = True
     # A low-confidence but plausibly-relevant item is escalated rather than
@@ -166,8 +170,9 @@ class EscalationRateMonitor:
 
     A router that quietly stops escalating looks identical to a quiet news week
     right up until the P&L shows up. Comparing consecutive windows catches a
-    silent model swap, a prompt edit, or a kernel change that shifts the
-    distribution without breaking anything visibly.
+    silent model swap, a prompt edit, or a provider quietly changing what sits
+    behind a slug — all of which shift the distribution without breaking
+    anything visibly.
     """
 
     def __init__(self, drift_threshold: float = 0.20) -> None:
@@ -204,6 +209,6 @@ __all__ = [
     "EscalationDecision",
     "EscalationPolicy",
     "EscalationRateMonitor",
-    "HostedBackend",
+    "FallbackBackend",
     "Router",
 ]

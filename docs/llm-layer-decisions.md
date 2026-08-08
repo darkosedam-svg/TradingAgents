@@ -1,8 +1,21 @@
-# Local inference layer — framing decisions
+# Triage inference layer — framing decisions
 
 Written so they don't get relitigated. Each of these was decided, not left open.
 If one of them is revisited, amend this file with the date and the reason rather
 than quietly changing the code.
+
+> **Amended 2026-08-08 — decisions 1 and 2 are superseded.** There is no NVIDIA
+> GPU available: the target machine has Intel integrated graphics, and the
+> Hetzner subscription is Hetzner **Cloud**, which has no GPU instances. vLLM
+> needs CUDA, so local serving is not an option at any model size.
+>
+> The layer now runs a **cheap hosted model** as the triage tier instead. See
+> [Amendment: from local serving to cheap-model triage](#amendment-2026-08-08--from-local-serving-to-cheap-model-triage)
+> at the end of this file. Decisions 3 and 4 are unaffected and remain in force —
+> they were never about where the model runs.
+>
+> Sections 1 and 2 are kept rather than deleted, because the reasoning for
+> *rejecting OmniQuant* still applies if local serving is ever revisited.
 
 ## 1. AWQ-INT4 checkpoints from Hugging Face, served by vLLM. Not OmniQuant.
 
@@ -104,7 +117,94 @@ number here when you do.
 
 - Quantizing anything ourselves.
 - Fine-tuning — revisit only if Gate A/B fails specifically on domain vocabulary.
-- Replacing the frontier decision layer. The local model *feeds* it, never *is* it.
+- Replacing the frontier decision layer. The triage model *feeds* it, never *is* it.
 - An LLM anywhere in the latency-arb execution lane.
-- Multi-GPU / tensor parallel — single card until throughput is genuinely the bottleneck.
+- Multi-GPU / tensor parallel — moot while there is no GPU at all.
 - The ML Model specialist — different problem, don't conflate.
+
+---
+
+## Amendment 2026-08-08 — from local serving to cheap-model triage
+
+### What forced it
+
+`Get-CimInstance Win32_VideoController` on the target machine returns Intel UHD
+Graphics and nothing else. No NVIDIA card, therefore no CUDA, therefore no vLLM.
+The Hetzner subscription is Hetzner Cloud (`console.hetzner.com`), whose VM
+product has no GPU instances at all — GPUs there are the separate GEX dedicated
+line, on a monthly contract starting around €184/mo.
+
+That is Phase 0's off-ramp firing, at the cost of one command.
+
+### Why the project continued anyway
+
+Re-reading what the plan says the payoff is:
+
+> That routing job is where the money actually is: it turns a hosted-API bill
+> that scales with candidates into one that scales with *finalists*.
+
+That is a claim about **routing**, not about **local inference**. Local
+inference was one way to obtain a cheap triage model, and on this hardware it is
+not an available one. A small hosted model is another, and it delivers the same
+economics.
+
+The trade is favourable on more than cost:
+
+| | local vLLM | cheap hosted |
+|---|---|---|
+| hardware | GPU required | none |
+| fixed cost | card, or €184+/mo | $0 idle, per-call after |
+| marginal cost | ~0 | small but nonzero |
+| WSL2/driver breakage | a live risk | gone |
+| GPU contention with backtests | a live risk | gone |
+| quantization degradation | the whole reason Gate A exists | gone |
+| provider changes model behind a slug | n/a | **new risk** |
+| data leaves the machine | no | **yes** |
+
+The last two rows are the honest cost. Silent model substitution is why the
+nightly drift job matters *more* now, not less. And triage input — headlines,
+chat messages, token metadata — now goes to a third party; that is fine for
+public text, and would not be for anything private.
+
+### Decisions made in the rework
+
+**Structured output is now a mode, not a hardcoded field.** `guided_json` is a
+vLLM extension. The client supports three modes (`json_schema`, `guided_json`,
+`prompt`) so the same code serves a hosted gateway, a self-hosted container, or
+a provider with no structured-output support at all. Switching is one env var.
+
+**Validation keywords are stripped from the schema sent upstream.**
+OpenAI-style strict mode rejects `minimum`, `maxLength` and friends. Dropping
+them costs nothing because it matches the division of labour already in place:
+the provider guarantees the response *parses into the right shape*, the Pydantic
+validators guarantee the values are *in range and self-consistent*. A confidence
+of 1.4 was always going to be caught by the validator.
+
+**Responses are parsed defensively.** In `prompt` mode a model may wrap its JSON
+in a markdown fence or bracket it with commentary. `extract_json` recovers the
+first balanced object rather than failing the call over a stray "Here you go:".
+Anything it cannot recover is a `SCHEMA_FAIL` abstention, as before.
+
+**Budgets track dollars, not just tokens.** Serving is metered now, so
+`BudgetLedger` carries optional `Pricing` and a `max_usd_per_day` per task. A
+retry storm shows up as a refusal rather than an invoice.
+
+**"local vs hosted" became "primary vs fallback".** Everything is hosted now, so
+the old names described nothing. The fallback is a *second provider*, and what
+the router saves is *frontier* calls — hence `gate_c(frontier_call_reduction=)`.
+
+**Gate A survives, re-pointed.** It was quant-vs-FP16; it is now
+cheap-vs-frontier on the same golden sets, with the same math. Arguably it
+matters more: "is the cheap model good enough to stand in front of an expensive
+one" is exactly the question the gate's numbers answer.
+
+### What was deleted
+
+`services/llm/docker/` — the vLLM compose file and its `.env.example`. Recover
+it from git history if a GPU ever appears.
+
+### What did not change
+
+Decisions 3 and 4 above, entirely. The layer is still warm-path only, the
+advisory deadline is still enforced in code, and abstention is still the central
+safety property. None of that was ever about where the model runs.

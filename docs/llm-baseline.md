@@ -10,23 +10,31 @@ problem.
 
 ## The off-ramp
 
-> If hosted spend is under **~$30/month** and latency is acceptable, **stop
+> If frontier spend is under **~$15/month** and latency is acceptable, **stop
 > here.** The layer is not worth the ops burden yet.
 
-This is a real off-ramp, not a formality. A GPU that must stay resident, a
-container that breaks on driver upgrades, and a nightly eval job are all
-permanent costs. They need to be paid for by a bill that actually hurts.
+**The threshold moved down (2026-08-08), and the reason matters.** It was ~$30/mo
+when the plan assumed a resident GPU — a card that must stay powered, a container
+that breaks on driver upgrades, and a nightly eval job are heavy fixed costs, and
+they need a bill that actually hurts to justify them.
 
-Two further conditions worth checking before committing, both of which can also
+Serving from a cheap hosted model removes almost all of that. The fixed cost is
+zero, there is nothing to keep resident, and the remaining ops burden is a prompt
+registry and a nightly eval run. A lower bar clears it. What is left to justify
+is the *complexity* of a two-tier routing system, not the cost of hardware.
+
+Two further conditions worth checking before committing, both of which can still
 end the project early:
 
 - **Is the spend concentrated in triage or in decisions?** If most of the money
-  is going to a small number of high-value frontier calls rather than to
-  hundreds of cheap candidate screens, the escalation router has nothing to
-  route and the payoff disappears.
-- **Is latency actually a problem?** If p95 on the hosted path is comfortably
-  inside every decision window, local inference buys nothing on that axis, and
-  the case rests entirely on cost.
+  goes to a small number of high-value frontier calls rather than to hundreds of
+  cheap candidate screens, the escalation router has nothing to route and the
+  payoff disappears. This is now the *main* way the project dies — it is a much
+  sharper test than the dollar threshold.
+- **Is latency actually a problem?** A cheap hosted model is not obviously faster
+  than an expensive one; small models decode quicker but you are still paying a
+  network round trip. If the case ever rested on latency, it no longer does. The
+  case is cost, and only cost.
 
 ## 1. Volume and cost — 7 consecutive days
 
@@ -76,26 +84,37 @@ worth building.
 | items reaching a frontier call/day | |
 | ratio | |
 
-## 4. Hardware
+## 4. Triage model
+
+**Settled 2026-08-08: there is no GPU, so this is a hosted model.** See the
+amendment in `llm-layer-decisions.md`. What used to be a VRAM inventory is now a
+model-and-price choice.
 
 | | value |
 |---|---|
-| GPU | |
-| VRAM | |
-| shared with backtests/training? | |
+| provider | |
+| triage model slug | |
+| $/1M prompt tokens | |
+| $/1M completion tokens | |
+| structured output supported? | |
 
-Pick the serving row from the VRAM:
+Put the two prices into `Pricing` on the `BudgetLedger` so `spent_usd()` reports
+real numbers rather than zero. Check them against the provider's page rather
+than trusting any default in this repo — model pricing moves faster than
+committed code.
 
-| VRAM | model | quant | role |
-|---|---|---|---|
-| ≥ 24 GB | Qwen2.5-14B-Instruct | AWQ-INT4 | primary reasoning/triage |
-| 12–24 GB | Qwen2.5-7B-Instruct | AWQ-INT4 | primary |
-| any | Qwen2.5-3B-Instruct | AWQ-INT4 | high-volume classify only, never tool-calling |
+**Projected triage cost.** Multiply the candidate volume from section 3 by the
+per-call token estimate. This is the number that has to stay well under the
+hosted-decision spend it displaces, or the router is moving money rather than
+saving it:
 
-If the GPU is shared with backtests or training, decide now whether to reserve
-it or pin backtests off-hours. Contention shows up as a p95 blowout, and the
-circuit breaker will paper over it by silently routing to hosted — which means
-the bill quietly comes back and the dashboard is the only place you'd notice.
+| | value |
+|---|---:|
+| candidates screened/day | |
+| avg tokens per triage call | |
+| **projected triage $/day** | |
+| frontier $/day displaced | |
+| **net saving** | |
 
 ## 5. Decision
 
