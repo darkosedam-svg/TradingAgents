@@ -23,6 +23,33 @@ zero, there is nothing to keep resident, and the remaining ops burden is a promp
 registry and a nightly eval run. A lower bar clears it. What is left to justify
 is the *complexity* of a two-tier routing system, not the cost of hardware.
 
+## Model it before you measure it
+
+The full seven-day log is still the right way to *confirm* this, but you can
+find the shape of the answer in two minutes:
+
+```bash
+python -m services.llm.breakeven --candidates 200 --frontier-share 1.0 \
+    --escalation-rate 0.25 --triage-price 0.30 1.20 --frontier-price 3.00 15.00
+```
+
+It reduces to one inequality:
+
+    triage_cost_per_call / frontier_cost_per_call  <  frontier_share_today
+
+Screening every candidate cheaply only saves money if the cheap screen costs
+less than the frontier calls it removes. Two runs bracket the whole decision:
+
+| scenario | share reaching frontier today | saving | verdict |
+|---|---:|---:|---|
+| every candidate gets an expensive call | 100% | ~$93/mo | build it |
+| a filter already sits in front | 20% | ~$4/mo | stop |
+
+Same volume, same prices — a 25x swing in the answer. **`frontier_share_today`
+is the number that decides this project**, and it is the one worth measuring
+first if you measure nothing else. Fill in your own prices; the ones above are
+placeholders, and model pricing moves faster than committed code.
+
 Two further conditions worth checking before committing, both of which can still
 end the project early:
 
@@ -48,7 +75,7 @@ end the project early:
 | tokens/day (mean) | |
 | **$/day (mean)** | |
 | **$/month (projected)** | |
-| over the $30/mo off-ramp? | |
+| over the $15/mo off-ramp? | |
 
 ## 2. Latency
 

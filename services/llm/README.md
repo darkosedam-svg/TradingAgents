@@ -36,6 +36,21 @@ services/llm/
 └─ tests/
 ```
 
+## Is this worth building?
+
+Before anything else. The Phase 0 off-ramp is a real one, and the arithmetic
+takes two minutes:
+
+```bash
+python -m services.llm.breakeven --candidates 200 --frontier-share 1.0 \
+    --escalation-rate 0.25 --triage-price 0.30 1.20 --frontier-price 3.00 15.00
+```
+
+Exits non-zero when the numbers say don't build it. The decisive input is
+`--frontier-share`: what fraction of your candidate stream reaches an expensive
+model *today*. At 100% the router is worth roughly $93/mo on 200 candidates/day;
+at 20% it is worth $4/mo and the plan says stop. Same volume, same prices.
+
 ## Configuring
 
 Everything comes from the environment, with working defaults:
