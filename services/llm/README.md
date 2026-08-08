@@ -42,7 +42,9 @@ Before anything else. The Phase 0 off-ramp is a real one, and the arithmetic
 takes two minutes:
 
 ```bash
-python -m services.llm.breakeven --candidates 200 --frontier-share 1.0 \
+# from the repo root. No venv, no pip install - this file has no dependencies,
+# by design: it is what you run to decide whether to install anything at all.
+python services/llm/breakeven.py --candidates 200 --frontier-share 1.0 \
     --escalation-rate 0.25 --triage-price 0.30 1.20 --frontier-price 3.00 15.00
 ```
 

@@ -1,8 +1,13 @@
 """Does the escalation router pay for itself? Four numbers and a division.
 
-    python -m services.llm.breakeven --candidates 400 --frontier-share 1.0 \
+    python services/llm/breakeven.py --candidates 400 --frontier-share 1.0 \
         --escalation-rate 0.25 \
         --triage-price 0.30 1.20 --frontier-price 3.00 15.00
+
+**This file has no dependencies and no imports from the rest of the package.**
+That is deliberate: it is the first thing anyone runs, *before* deciding whether
+to build the layer at all, so it must not require installing the layer first.
+Plain Python, no venv, no pip. Copy the single file anywhere and it works.
 
 Phase 0 asks whether the layer is worth building. The full worksheet in
 `docs/llm-baseline.md` wants seven days of real traffic, and it should still be
@@ -26,9 +31,27 @@ import argparse
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from .client.budget import Pricing
-
 DAYS_PER_MONTH = 30.4
+
+
+@dataclass(frozen=True)
+class Pricing:
+    """USD per million tokens.
+
+    Mirrors ``client.budget.Pricing`` rather than importing it, to keep this
+    file free of package imports — importing anything from ``services.llm``
+    pulls in pydantic and httpx. ``test_breakeven`` asserts the two stay in
+    agreement, so the duplication cannot drift silently.
+    """
+
+    prompt_per_1m: float = 0.0
+    completion_per_1m: float = 0.0
+
+    def cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        return (
+            prompt_tokens * self.prompt_per_1m
+            + completion_tokens * self.completion_per_1m
+        ) / 1_000_000
 
 
 @dataclass(frozen=True)

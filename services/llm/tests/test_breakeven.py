@@ -1,10 +1,45 @@
+import pathlib
+
 import pytest
 
-from services.llm.breakeven import DAYS_PER_MONTH, CallProfile, Scenario, _cli, report
-from services.llm.client.budget import Pricing
+from services.llm.breakeven import (
+    DAYS_PER_MONTH,
+    CallProfile,
+    Pricing,
+    Scenario,
+    _cli,
+    report,
+)
+from services.llm.client.budget import Pricing as BudgetPricing
 
 CHEAP = Pricing(prompt_per_1m=0.30, completion_per_1m=1.20)
 FRONTIER = Pricing(prompt_per_1m=3.00, completion_per_1m=15.00)
+
+
+def test_breakeven_has_no_package_imports():
+    """It must run on bare Python — it is what you use to decide whether to
+    install anything at all."""
+    source = (
+        pathlib.Path(__file__).parent.parent / "breakeven.py"
+    ).read_text(encoding="utf-8")
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ")):
+            assert "services" not in stripped, stripped
+            assert not stripped.startswith("from ."), stripped
+            for third_party in ("pydantic", "httpx"):
+                assert third_party not in stripped, stripped
+
+
+def test_local_pricing_agrees_with_the_budget_ledger():
+    """The duplication is deliberate; this stops it drifting."""
+    local = Pricing(prompt_per_1m=0.30, completion_per_1m=1.20)
+    canonical = BudgetPricing(prompt_per_1m=0.30, completion_per_1m=1.20)
+
+    for prompt, completion in ((0, 0), (1, 1), (900, 120), (10_000, 2_500)):
+        assert local.cost(prompt, completion) == canonical.cost(prompt, completion)
+
+    assert Pricing().cost(1_000_000, 1_000_000) == 0.0  # unpriced means zero
 
 
 def scenario(**overrides) -> Scenario:

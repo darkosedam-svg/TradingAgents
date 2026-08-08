@@ -29,7 +29,8 @@ The full seven-day log is still the right way to *confirm* this, but you can
 find the shape of the answer in two minutes:
 
 ```bash
-python -m services.llm.breakeven --candidates 200 --frontier-share 1.0 \
+# from the repo root. No venv, no pip install - this file has no dependencies.
+python services/llm/breakeven.py --candidates 200 --frontier-share 1.0 \
     --escalation-rate 0.25 --triage-price 0.30 1.20 --frontier-price 3.00 15.00
 ```
 
