@@ -1,0 +1,56 @@
+# vLLM serving substrate. Runs under WSL2 on the Windows host with GPU
+# passthrough; the rest of the stack talks to it over http://localhost:8000/v1
+# and neither knows nor cares that it is local.
+#
+#   cp .env.example .env   # then edit MODEL_ID / MAX_LEN / GPU_UTIL
+#   docker compose up -d
+#   curl localhost:8000/v1/models
+#
+# Prerequisites on the host: WSL2, an NVIDIA driver, and the NVIDIA Container
+# Toolkit inside the WSL distro (`nvidia-ctk runtime configure --runtime=docker`).
+
+services:
+  vllm:
+    # Pinned, not :latest. A vLLM or kernel upgrade is a change to the serving
+    # substrate and must go through the golden sets like any other change.
+    image: vllm/vllm-openai:${VLLM_TAG:-v0.6.3.post1}
+    container_name: shuriken-vllm
+    runtime: nvidia
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # loopback only; this endpoint has no auth
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - VLLM_LOGGING_LEVEL=INFO
+    volumes:
+      # Persist weights across container recreation — a re-pull of a 14B AWQ
+      # checkpoint is the difference between a 40s restart and a 20 minute one.
+      - hf_cache:/root/.cache/huggingface
+    ipc: host
+    command: >
+      --model ${MODEL_ID:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      --quantization ${QUANTIZATION:-awq_marlin}
+      --max-model-len ${MAX_LEN:-8192}
+      --gpu-memory-utilization ${GPU_UTIL:-0.90}
+      --guided-decoding-backend xgrammar
+      --enable-prefix-caching
+      --served-model-name ${MODEL_ID:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      --disable-log-requests
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      # Generous: a cold start with a model pull is minutes, and we would rather
+      # wait than have the orchestrator restart-loop a downloading container.
+      start_period: 900s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  hf_cache:
