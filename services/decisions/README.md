@@ -176,6 +176,64 @@ Example 3 is the one people find least intuitive: a 65% hit rate against a
 break-even of 66.7% is a losing system, and the hit rate is the number that gets
 reported.
 
+## 6. The same three, on real market data
+
+```bash
+python -m services.decisions.real_examples     # committed data, offline
+python -m services.decisions.data.fetch        # refresh it
+```
+
+Nothing simulated. Kraken daily closes for BTC/ETH/SOL (721 bars, the full
+depth of the public endpoint) and 354 settled Polymarket binaries, each paired
+with what the market was **quoting about a day before it ended** — taken from
+the CLOB price history, because a closed market's `outcomePrices` is the answer,
+not the forecast. Neither source needs a key.
+
+**BTC/USD 20/50 crossover**, 520 daily decisions, Mar 2025 → Aug 2026. The
+textbook parameters, fixed in advance:
+
+```
+hit rate            50.6%
+per-obs Sharpe      +0.0071  (≈+0.14 annualised)
+compounded          -4.4%    (BTC itself: -25.3%)
+observations needed 53,147
+```
+
+It beat holding, which is worth something and is not an edge.
+
+**Every crossover cell on the same series** — 299 of them:
+
+```
+best cell           SMA 5/40, Sharpe +0.0633 (≈+1.21 annualised)
+median cell         -0.0045
+
+reporting only the winner:   deflated 0.925   FAIL (just)
+counting all 299 attempts:   deflated 0.533   FAIL
+                             no-skill benchmark for 299 tries: +0.060
+```
+
+The winner's 0.0633 sits a hair above what the best of 299 coin flips produces
+on this data. The holdout is the interesting part: **ETH +0.0647, SOL +0.0208**,
+neither fitted — and neither clears the bar either.
+
+**Backing the favourite on 354 real resolved markets:**
+
+```
+favourite was right   84.2%
+P&L on $1 per market  -14.77
+at zero trading cost  -12.19
+```
+
+84% accurate and losing money — and not because of fees. The odds on a
+favourite already *are* the odds. This is example 3's lesson with no simulation
+anywhere in it.
+
+One real finding fell out of this. The research brief cited ~61% accuracy under
+$10k against ~84% over $100k. On this sample: 81.7% / 86.1% / 87.0% / 78.8% /
+88.0% across five volume bands — **the gap does not reproduce**, and the
+finding has been demoted in [the evidence
+review](../../docs/unified-agent-findings.md) accordingly.
+
 ## Caveats worth carrying
 
 - **Sharpe here is per-observation and not annualised.** Annualising a short,
@@ -203,7 +261,8 @@ reported.
 pytest services/decisions/tests -q
 ```
 
-72 tests, no network, no credentials, no dependencies. Several assert
+82 tests, no network, no credentials, no dependencies — the real-data examples
+read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a
 sink cannot change a decision. The three worked examples are tested too, because

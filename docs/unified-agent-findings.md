@@ -71,9 +71,31 @@ profits.
 
 Decisive detail: **winners are limit-order liquidity providers; losers are
 market-order takers.** A system that scans many small markets and crosses the
-spread on ranked alerts is the losing cohort by construction. Accuracy also
-degrades sharply in thin markets — ~61% correct under $10k volume versus ~84%
-above $100k.
+spread on ranked alerts is the losing cohort by construction.
+
+The brief also reported accuracy degrading sharply in thin markets — ~61%
+correct under $10k volume versus ~84% above $100k. **That one did not
+reproduce.** Pulled directly from the CLOB on 9 Aug 2026 — 354 settled binaries
+sampled across five volume bands, priced ~24h before their scheduled end
+([`services/decisions/data/fetch.py`](../services/decisions/data/fetch.py)):
+
+| Volume | n | Favourite correct | Brier |
+|---|---|---|---|
+| $1k–10k | 82 | 81.7% | 0.110 |
+| $10k–100k | 79 | 86.1% | 0.103 |
+| $100k–1M | 77 | 87.0% | 0.076 |
+| $1M–10M | 66 | 78.8% | 0.136 |
+| over $10M | 50 | 88.0% | 0.081 |
+
+Not monotonic, and nothing like a 61/84 split. Sampling a day out flatters
+every band and this is a different market population from the study's, so it is
+not a refutation — but the figure cannot be cited as support. **Demoted to
+unverified.**
+
+What *did* reproduce, and more sharply than expected: backing the favourite on
+those 354 markets was **84.2% accurate and lost $14.77 per $354 staked** — and
+lost $12.19 of that at literally zero trading cost. Being right is not the same
+as being paid.
 
 ## What was killed
 
@@ -89,6 +111,7 @@ Almost every claim a build case would want to lean on:
 | Directional accuracy ~50% across 918 experiments | 0–3 |
 | Overfitted strategies systematically *lose* out of sample | 0–3 |
 | Polymarket mispricing concentrates early and near resolution | 0–3 |
+| Polymarket accuracy ~61% under $10k vs ~84% over $100k | survived 2–1, then failed to reproduce against the live CLOB — see above |
 | Bitquery Pump.fun starts at $49/month | 0–3 |
 | Look-ahead bias is the dominant cause of inflated backtests | 0–3 |
 

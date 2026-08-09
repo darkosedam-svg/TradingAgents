@@ -226,7 +226,7 @@ class Verdict:
         needed = (
             "never — not ahead of the bar"
             if math.isinf(self.min_observations)
-            else f"{self.min_observations:.0f}"
+            else f"{self.min_observations:,.0f}"
         )
         return (
             f"[{head}] Sharpe {self.observed_sr:.3f} over {self.n_observations} obs, "
@@ -299,7 +299,13 @@ class OverfittingGuard:
             kurtosis=kurtosis,
             sr_std_across_trials=std,
         )
-        needed = min_track_record_length(observed_sr, skew=skew, kurtosis=kurtosis)
+        # The bar a track record has to clear is the no-skill benchmark, not
+        # zero. With one trial those coincide; with many they do not, and
+        # measuring against zero would quietly promise that enough data can
+        # prove an edge the search already inflated.
+        needed = min_track_record_length(
+            observed_sr, target_sr=benchmark, skew=skew, kurtosis=kurtosis
+        )
 
         if n_observations < self.min_observations:
             return Verdict(
@@ -327,9 +333,15 @@ class OverfittingGuard:
                     "to collect more evidence about."
                 )
             elif needed > n_observations:
+                against = (
+                    ""
+                    if trials == 1
+                    else f" to prove it beats the best of {trials} no-skill attempts"
+                )
                 why = (
                     f"not enough evidence for an edge this size: {n_observations} "
-                    f"observations, roughly {needed:.0f} needed. Keep logging."
+                    f"observations, roughly {needed:,.0f} needed{against}. "
+                    "Keep logging."
                 )
             else:
                 why = (
