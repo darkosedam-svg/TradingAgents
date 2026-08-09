@@ -32,8 +32,8 @@ import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from statistics import NormalDist
-from typing import Optional
+from statistics import NormalDist, stdev
+from typing import Optional, Sequence
 
 # Euler-Mascheroni constant, as used in the paper's Snippet 1.
 EULER_MASCHERONI = 0.5772156649015329
@@ -113,6 +113,27 @@ def expected_max_sharpe(
         1 - 1 / (n_trials * math.e)
     )
     return mean_sr + std_sr * max_z
+
+
+def measure_trial_dispersion(trial_sharpes: Sequence[float]) -> float:
+    """Spread of Sharpe ratios across the attempts you actually made.
+
+    This is the scale factor the whole correction hangs on, and guessing it is
+    the easiest way to get a wrong answer in either direction. The paper's
+    worked examples use annualised Sharpes, where a dispersion near 1.0 is
+    reasonable; a per-observation Sharpe from a few hundred daily returns has a
+    dispersion nearer ``1/sqrt(n_observations)``. Feed the wrong one in and the
+    guard either rejects everything or waves everything through.
+
+    So: run the search, collect the Sharpe of every cell you tried — including
+    the bad ones, especially the bad ones — and hand the list to this.
+    """
+    if len(trial_sharpes) < 2:
+        raise ValueError(
+            "dispersion needs at least 2 trials; with one attempt there is no "
+            "search to correct for and the benchmark is simply zero"
+        )
+    return stdev(trial_sharpes)
 
 
 def deflated_sharpe_ratio(
@@ -202,13 +223,18 @@ class Verdict:
 
     def report(self) -> str:
         head = "PASS" if self.passed else "FAIL"
+        needed = (
+            "never — not ahead of the bar"
+            if math.isinf(self.min_observations)
+            else f"{self.min_observations:.0f}"
+        )
         return (
             f"[{head}] Sharpe {self.observed_sr:.3f} over {self.n_observations} obs, "
             f"{self.n_trials} trial(s)\n"
             f"  no-skill benchmark (best of {self.n_trials}): {self.benchmark_sr:.3f}\n"
             f"  deflated Sharpe (P skill is real):            {self.dsr:.3f}\n"
             f"  observations needed:                          "
-            f"{self.min_observations:.0f}\n"
+            f"{needed}\n"
             f"  {self.reason}"
         )
 
@@ -229,10 +255,12 @@ class OverfittingGuard:
         *,
         min_dsr: float = 0.95,
         min_observations: int = 30,
+        sr_std_across_trials: float = 1.0,
     ) -> None:
         self.register = register or TrialRegister()
         self.min_dsr = min_dsr
         self.min_observations = min_observations
+        self.sr_std_across_trials = sr_std_across_trials
 
     def evaluate(
         self,
@@ -242,17 +270,34 @@ class OverfittingGuard:
         n_trials: Optional[int] = None,
         skew: float = 0.0,
         kurtosis: float = 3.0,
+        sr_std_across_trials: Optional[float] = None,
     ) -> Verdict:
+        """Judge one result.
+
+        ``sr_std_across_trials`` is the spread of Sharpe ratios *across the
+        attempts you made*, and it sets the scale of the whole correction. The
+        default of 1.0 comes from the paper, where Sharpes are annualised; if
+        you are feeding this per-observation Sharpes — as
+        :mod:`services.decisions.scoring` produces — 1.0 is wildly too large and
+        the guard will reject everything. Measure it from your own trial results
+        and pass it in. :func:`measure_trial_dispersion` does that.
+        """
         trials = self.register.count if n_trials is None else n_trials
         trials = max(1, trials)
+        std = (
+            self.sr_std_across_trials
+            if sr_std_across_trials is None
+            else sr_std_across_trials
+        )
 
-        benchmark = expected_max_sharpe(trials)
+        benchmark = expected_max_sharpe(trials, std_sr=std)
         dsr = deflated_sharpe_ratio(
             observed_sr,
             n_trials=trials,
             n_observations=n_observations,
             skew=skew,
             kurtosis=kurtosis,
+            sr_std_across_trials=std,
         )
         needed = min_track_record_length(observed_sr, skew=skew, kurtosis=kurtosis)
 
@@ -271,6 +316,15 @@ class OverfittingGuard:
                     f"the result ({observed_sr:.3f}) does not even clear what the best "
                     f"of {trials} no-skill attempts would produce ({benchmark:.3f}). "
                     "More data will not fix this; the search itself is the problem."
+                )
+            elif observed_sr <= 0:
+                # Without this branch the next one tells someone whose strategy
+                # is losing money to "keep logging", which is the opposite of
+                # the right advice.
+                why = (
+                    f"the result is not positive ({observed_sr:+.3f}). No sample "
+                    "size rescues a negative expectancy — there is nothing here "
+                    "to collect more evidence about."
                 )
             elif needed > n_observations:
                 why = (
@@ -300,5 +354,6 @@ __all__ = [
     "Verdict",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "measure_trial_dispersion",
     "min_track_record_length",
 ]

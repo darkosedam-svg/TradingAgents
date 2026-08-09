@@ -7,6 +7,7 @@ from services.decisions.trials import (
     TrialRegister,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    measure_trial_dispersion,
     min_track_record_length,
 )
 
@@ -193,3 +194,53 @@ def test_same_result_flips_verdict_purely_on_trial_count():
     assert honest.passed
     assert not searched.passed
     assert honest.observed_sr == searched.observed_sr
+
+
+def test_dispersion_is_measured_from_the_trials_you_actually_ran():
+    assert measure_trial_dispersion([0.1, 0.2, 0.3, 0.4]) == pytest.approx(
+        0.12909944, abs=1e-6
+    )
+
+
+def test_dispersion_refuses_a_single_trial():
+    with pytest.raises(ValueError):
+        measure_trial_dispersion([0.3])
+
+
+def test_dispersion_scales_the_whole_correction():
+    """The default of 1.0 is an annualised-Sharpe convention. Feed it
+    per-observation Sharpes and it rejects everything, which is why the
+    measured value has to be passed in."""
+    guard = OverfittingGuard()
+
+    with_default = guard.evaluate(0.30, n_observations=250, n_trials=20)
+    with_measured = guard.evaluate(
+        0.30, n_observations=250, n_trials=20, sr_std_across_trials=0.06
+    )
+
+    assert not with_default.passed
+    assert with_measured.passed
+    assert with_measured.benchmark_sr < with_default.benchmark_sr
+
+
+def test_guard_takes_a_dispersion_at_construction_time():
+    guard = OverfittingGuard(sr_std_across_trials=0.06)
+    assert guard.evaluate(0.30, n_observations=250, n_trials=20).passed
+
+
+def test_a_losing_strategy_is_not_told_to_keep_logging():
+    """The message must not confuse 'too early to tell' with 'this loses
+    money'. They call for opposite actions."""
+    guard = OverfittingGuard()
+    verdict = guard.evaluate(-0.05, n_observations=500, n_trials=1)
+
+    assert not verdict.passed
+    assert "not positive" in verdict.reason
+    assert "Keep logging" not in verdict.reason
+    assert "never" in verdict.report()
+
+
+def test_report_does_not_print_infinity_as_a_sample_size():
+    guard = OverfittingGuard()
+    report = guard.evaluate(-0.05, n_observations=500, n_trials=1).report()
+    assert "inf" not in report

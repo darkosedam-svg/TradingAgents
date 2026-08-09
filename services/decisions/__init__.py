@@ -29,6 +29,7 @@ from .trials import (
     Verdict,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    measure_trial_dispersion,
     min_track_record_length,
 )
 
@@ -54,6 +55,7 @@ __all__ = [
     "calibration",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "measure_trial_dispersion",
     "min_track_record_length",
     "overall",
     "summary",

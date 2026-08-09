@@ -151,10 +151,42 @@ searched = guard.evaluate(1.6, n_observations=800, n_trials=1000)   # fails
 Identical Sharpe, identical sample, opposite verdict — decided purely by how
 many attempts it took to find. That is the whole point.
 
+## 5. Three worked examples
+
+```bash
+python -m services.decisions.examples
+```
+
+Three situations you will actually be in, run end to end through the journal,
+the scorer and the guard. Seeded, so the numbers reproduce exactly.
+
+| | Situation | Verdict |
+|---|---|---|
+| 1 | One idea, never re-tuned, real Sharpe-0.9 edge, 260 days | **FAIL** — real but unproven; needs ~812 observations |
+| 2 | 400-cell grid search over data with *zero* edge | **PASS** if you report only the winner, **FAIL** once the 400 are counted |
+| 3 | Prediction-market triage, 65% hit rate, 5:10 payoff | **FAIL** — right more often than not, and losing money |
+
+Example 2 is the one to sit with. The best cell scores 0.172 per observation —
+about 2.7 annualised — over 250 days, with a deflated Sharpe of **0.997** if you
+present it alone. Disclose the other 399 attempts and the same numbers give
+**0.420**, below a no-skill benchmark of 0.185. The true edge is exactly zero by
+construction.
+
+Example 3 is the one people find least intuitive: a 65% hit rate against a
+break-even of 66.7% is a losing system, and the hit rate is the number that gets
+reported.
+
 ## Caveats worth carrying
 
 - **Sharpe here is per-observation and not annualised.** Annualising a short,
   noisy sample is how a mediocre strategy starts looking impressive.
+- **`sr_std_across_trials` sets the scale of the whole correction, and the
+  default is not yours.** 1.0 is the paper's convention for *annualised*
+  Sharpes. Per-observation Sharpes from a few hundred daily returns are
+  dispersed nearer `1/√n` — 0.06 in example 2 — and leaving the default in
+  place rejects everything indiscriminately. Run the search, keep the Sharpe of
+  every cell including the bad ones, and pass them to
+  `measure_trial_dispersion`.
 - **The correction assumes roughly independent trials.** Twenty variants of one
   idea have a smaller effective N than twenty unrelated ideas, so the guard is
   optimistic when your search is correlated. Bailey's paper discusses estimating
@@ -171,7 +203,9 @@ many attempts it took to find. That is the whole point.
 pytest services/decisions/tests -q
 ```
 
-61 tests, no network, no credentials, no dependencies. Several assert
+72 tests, no network, no credentials, no dependencies. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a
-sink cannot change a decision.
+sink cannot change a decision. The three worked examples are tested too, because
+their conclusions are documentation: if a change to the guard flips one of those
+verdicts, the prose describing it has silently become wrong.
