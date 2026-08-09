@@ -58,7 +58,39 @@ CLOB_HISTORY = (
 
 PAIRS = {"btc": "XBTUSD", "eth": "ETHUSD", "sol": "SOLUSD"}
 
-USER_AGENT = "services.decisions/1.0 (research; stdlib urllib)"
+# Every memecoin Kraken lists against USD. The list is short for a reason worth
+# noticing: it is the survivors.
+MEME_PAIRS = {
+    "doge": "DOGEUSD",
+    "shib": "SHIBUSD",
+    "pepe": "PEPEUSD",
+    "wif": "WIFUSD",
+    "bonk": "BONKUSD",
+    "floki": "FLOKIUSD",
+    "trump": "TRUMPUSD",
+    "popcat": "POPCATUSD",
+    "mog": "MOGUSD",
+    "turbo": "TURBOUSD",
+    "pengu": "PENGUUSD",
+    "fartcoin": "FARTCOINUSD",
+    "meme": "MEMEUSD",
+}
+
+# SPY is the benchmark the others have to beat; the rest span sectors so no one
+# industry's two years stands in for "equities".
+EQUITIES = ("SPY", "QQQ", "AAPL", "MSFT", "NVDA", "JPM", "KO", "XOM")
+
+YAHOO_CHART = (
+    "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
+    "?range={range}&interval=1d&events=div%2Csplit"
+)
+COINGECKO_MEMES = (
+    "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd"
+    "&category=meme-token&order=market_cap_desc&per_page={per_page}&page={page}"
+)
+
+# Yahoo serves the chart endpoint to browsers; a bare urllib UA gets a 429.
+USER_AGENT = "Mozilla/5.0 (compatible; services.decisions/1.0; research)"
 
 
 def _get(url: str, *, retries: int = 3) -> Any:
@@ -93,6 +125,106 @@ def fetch_ohlc(name: str, pair: str) -> Path:
             date = datetime.fromtimestamp(ts, timezone.utc).date().isoformat()
             writer.writerow([date, o, h, low, c, volume])
     print(f"  {path.name}: {len(rows)} daily bars, {rows[0][0]} → {rows[-1][0]}")
+    return path
+
+
+# -------------------------------------------------------------------- equities
+
+
+def fetch_equity(symbol: str, *, span: str = "2y") -> Optional[Path]:
+    """Daily bars for one ticker, using Yahoo's **adjusted** close.
+
+    Adjusted, not raw: a dividend or a split shows up in a raw close as a gap
+    that no strategy could have traded, and a crossover rule will happily
+    "predict" it. That is a look-ahead artefact wearing a price's clothes.
+    """
+    payload = _get(YAHOO_CHART.format(symbol=symbol, range=span))
+    result = (payload.get("chart") or {}).get("result") or []
+    if not result:
+        print(f"  {symbol}: no data returned, skipping")
+        return None
+    series = result[0]
+    stamps = series["timestamp"]
+    adjusted = series["indicators"]["adjclose"][0]["adjclose"]
+    quote = series["indicators"]["quote"][0]
+
+    path = HERE / f"yahoo_{symbol.lower()}_daily.csv"
+    written = 0
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["date", "open", "high", "low", "close", "volume"])
+        for i, ts in enumerate(stamps):
+            close = adjusted[i]
+            if close is None:
+                continue  # a halted or untraded session
+            date = datetime.fromtimestamp(ts, timezone.utc).date().isoformat()
+            writer.writerow(
+                [
+                    date,
+                    quote["open"][i],
+                    quote["high"][i],
+                    quote["low"][i],
+                    close,
+                    quote["volume"][i],
+                ]
+            )
+            written += 1
+    print(f"  {path.name}: {written} sessions")
+    return path
+
+
+# ------------------------------------------------------------- meme token universe
+
+
+def fetch_meme_universe(*, pages: int = 4, per_page: int = 250) -> Path:
+    """Every meme token CoinGecko currently lists, with its drawdown from peak.
+
+    This is the closest thing to a survivorship measurement the free data
+    allows. It still only contains tokens that are *listed today* — the ones
+    that went to zero and were delisted are absent, and no amount of querying
+    this endpoint will produce them. That absence is the finding.
+    """
+    rows: list[dict] = []
+    impossible = 0
+    for page in range(1, pages + 1):
+        try:
+            batch = _get(COINGECKO_MEMES.format(per_page=per_page, page=page))
+        except RuntimeError as exc:
+            print(f"  coingecko stopped at page {page}: {exc}")
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        for coin in batch:
+            if coin.get("ath_change_percentage") is None:
+                continue
+            if float(coin["ath_change_percentage"]) > 0:
+                # Nothing can trade above its own all-time high; when the
+                # vendor says otherwise the recorded peak is stale, usually
+                # after a redenomination. Drop it rather than let one
+                # impossible row set the top of the range.
+                impossible += 1
+                continue
+            rows.append(
+                {
+                    "id": coin["id"],
+                    "symbol": coin.get("symbol", ""),
+                    "market_cap_usd": coin.get("market_cap") or 0,
+                    "price_usd": coin.get("current_price") or 0,
+                    "pct_below_ath": round(float(coin["ath_change_percentage"]), 3),
+                    "ath_date": (coin.get("ath_date") or "")[:10],
+                }
+            )
+        time.sleep(2.0)  # the free tier is strict
+
+    path = HERE / "coingecko_meme_tokens.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(
+        f"  {path.name}: {len(rows)} listed meme tokens"
+        + (f" ({impossible} dropped for an impossible peak)" if impossible else "")
+    )
     return path
 
 
@@ -221,9 +353,26 @@ def fetch_polymarket(
 
 
 def main() -> None:
-    print("Kraken daily OHLC:")
+    print("Kraken daily OHLC — majors:")
     for name, pair in PAIRS.items():
         fetch_ohlc(name, pair)
+
+    print("\nKraken daily OHLC — memecoins:")
+    for name, pair in MEME_PAIRS.items():
+        try:
+            fetch_ohlc(name, pair)
+        except RuntimeError as exc:
+            print(f"  {name}: {exc}")
+        time.sleep(0.3)
+
+    print("\nYahoo daily adjusted closes — equities:")
+    for symbol in EQUITIES:
+        fetch_equity(symbol)
+        time.sleep(0.5)
+
+    print("\nCoinGecko meme token universe:")
+    fetch_meme_universe()
+
     print("\nPolymarket resolved binary markets:")
     fetch_polymarket()
     print("\nDone. Commit the CSVs so the examples stay reproducible.")

@@ -176,18 +176,28 @@ Example 3 is the one people find least intuitive: a 65% hit rate against a
 break-even of 66.7% is a losing system, and the hit rate is the number that gets
 reported.
 
-## 6. The same three, on real market data
+## 6. Five examples on real market data — one per domain
 
 ```bash
 python -m services.decisions.real_examples     # committed data, offline
 python -m services.decisions.data.fetch        # refresh it
 ```
 
-Nothing simulated. Kraken daily closes for BTC/ETH/SOL (721 bars, the full
-depth of the public endpoint) and 354 settled Polymarket binaries, each paired
-with what the market was **quoting about a day before it ended** — taken from
-the CLOB price history, because a closed market's `outcomePrices` is the answer,
-not the forecast. Neither source needs a key.
+Nothing simulated, no API keys anywhere:
+
+| Source | What |
+|---|---|
+| Kraken | daily closes, BTC/ETH/SOL + all 13 memecoins listed against USD, 721 bars |
+| Yahoo | daily **adjusted** closes, 8 US tickers, 501 sessions |
+| Polymarket | 354 settled binaries, each with what it was quoting ~24h before it ended |
+| CoinGecko | 999 currently-listed meme tokens and their distance from peak |
+
+Polymarket quotes come from the CLOB price history, not the settled
+`outcomePrices` — a closed market reports the answer, not the forecast. Equity
+closes are adjusted because a raw close gaps on every dividend and split, and a
+crossover rule will happily "predict" a gap nobody could trade.
+
+Each domain fails in a different way, which is the reason to run all five.
 
 **BTC/USD 20/50 crossover**, 520 daily decisions, Mar 2025 → Aug 2026. The
 textbook parameters, fixed in advance:
@@ -234,6 +244,59 @@ $10k against ~84% over $100k. On this sample: 81.7% / 86.1% / 87.0% / 78.8% /
 finding has been demoted in [the evidence
 review](../../docs/unified-agent-findings.md) accordingly.
 
+### Stocks — zero is the wrong bar
+
+Crypto went nowhere over this window, so reading a Sharpe against zero did
+little harm. Equities drifted up hard, and a rule that is long most of the time
+inherits that drift and reports it as skill.
+
+```
+SPY buy-and-hold        Sharpe +0.1270  (≈+2.02 annualised, +33.4%)
+
+2,392 cells (299 pairs × 8 tickers)
+best cell               SPY SMA 30/190, Sharpe +0.1192, +31.0%
+
+judged against zero     deflated 0.383   FAIL
+judged against SPY      Sharpe -0.0512   deflated 0.001   FAIL
+```
+
+The winner of 2,392 attempts is *worse than owning the ticker it was fitted
+to*. A Sharpe of 1.89 annualised looks like a result right up until you ask
+"compared to what". **In a rising market, the benchmark is the index.**
+
+### Memecoins — the sample is the problem
+
+All 13 memecoins Kraken lists against USD, from each one's first bar to today:
+
+```
+DOGE  -31.0%   SHIB  -65.5%   PEPE  -63.0%   WIF   -90.1%
+BONK  -84.7%   FLOKI -81.8%   TURBO -79.6%   MEME  -94.9%
+POPCAT-95.3%   MOG   -94.6%   TRUMP -94.9%   FART  -91.1%   PENGU -59.7%
+```
+
+**13 of 13 lost money** — and these are the ones that made it onto a major
+exchange and stayed there. Then search them the way an adaptive system would,
+3,887 cells across all 13:
+
+```
+best cell    TRUMP SMA 70/80, Sharpe +0.1077, compounded +281.4% over 368 days
+
+reporting only the winner:  deflated 0.980   PASS
+counting all 3,887:         deflated 0.332   FAIL
+                            no-skill benchmark: +0.131 vs the winner's +0.108
+```
+
+A strategy that nearly quadrupled money in a year, correctly rejected. This is
+the one case in the set where the naive verdict says **PASS** — which is exactly
+how a system without a trial counter ends up trading it.
+
+And the sample. Of 999 meme tokens CoinGecko lists right now, every one a
+survivor: **median 95.9% below its peak; 66.9% down more than 90%; 21.8% down
+more than 99%.** The ones that went to zero and got delisted are in none of
+those numbers and no free source will produce them, so the true distribution is
+worse by an amount the data cannot measure. That is why the evidence review
+defers this domain rather than modelling it more carefully.
+
 ## Caveats worth carrying
 
 - **Sharpe here is per-observation and not annualised.** Annualising a short,
@@ -261,7 +324,7 @@ review](../../docs/unified-agent-findings.md) accordingly.
 pytest services/decisions/tests -q
 ```
 
-82 tests, no network, no credentials, no dependencies — the real-data examples
+89 tests, no network, no credentials, no dependencies — the real-data examples
 read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a

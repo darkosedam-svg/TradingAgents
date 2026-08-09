@@ -1,23 +1,36 @@
-"""The same three examples, on real market data.
+"""Five examples on real market data, one per domain the system would cover.
 
 Everything here comes from prices that actually traded and events that actually
 resolved. Nothing is simulated:
 
-* **Kraken** daily closes for BTC, ETH and SOL — 721 bars, the full depth of
-  the public OHLC endpoint.
+* **Kraken** daily closes — BTC, ETH, SOL and all thirteen memecoins the
+  exchange lists against USD. 721 bars, the full depth of the public endpoint.
+* **Yahoo** daily *adjusted* closes for eight US tickers. Adjusted, because a
+  raw close gaps on every dividend and split and a crossover rule will happily
+  "predict" a gap nobody could trade.
 * **Polymarket** — 354 resolved binary markets, each paired with what the
   market was quoting roughly a day before it ended. The quote comes from the
   CLOB price history, not from the settled ``outcomePrices``, because a closed
   market reports the answer rather than the forecast.
+* **CoinGecko** — every meme token currently listed, with its distance from
+  peak. The closest measurement of survivorship the free data allows.
+
+Each domain fails in its own way, and that is the point of running all five:
+
+1. **Crypto** — one honest attempt shows nothing over 520 days.
+2. **Crypto, searched** — 299 cells produce a winner that the correction eats.
+3. **Prediction markets** — 84% accurate and losing money.
+4. **Equities** — zero is the wrong bar; the index is the bar.
+5. **Memecoins** — the sample is made entirely of survivors.
 
 Refresh the data with ``python -m services.decisions.data.fetch``; run the
 examples with::
 
     python -m services.decisions.real_examples
 
-The synthetic versions in :mod:`services.decisions.examples` exist to show the
-mechanism with the true edge known. These exist to show what the mechanism says
-when nobody knows the true edge — which is the situation you are actually in.
+The synthetic versions in :mod:`services.decisions.examples` show the mechanism
+with the true edge known. These show what the mechanism says when nobody knows
+the true edge — which is the situation you are actually in.
 
 Stdlib only.
 """
@@ -28,7 +41,8 @@ import csv
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import fmean, stdev
+from statistics import fmean, median, stdev
+from typing import Optional
 
 from .journal import DecisionJournal, Pair
 from .record import Decision, Domain, Realisation, Side
@@ -47,6 +61,35 @@ RULE = "─" * 74
 # different sample than another. 200 bars of lookback are reserved for the
 # slowest average.
 WARMUP = 200
+
+# One grid, reused by every search below, so "how many things did you try" has
+# the same meaning in each example.
+GRID = tuple(
+    (fast, slow)
+    for fast in range(5, 105, 5)
+    for slow in range(20, 210, 10)
+    if slow > fast
+)
+
+EQUITIES = ("SPY", "QQQ", "AAPL", "MSFT", "NVDA", "JPM", "KO", "XOM")
+
+# Every memecoin Kraken lists against USD. Thirteen names is the whole
+# investable universe on a major exchange, and that is itself the finding.
+MEMECOINS = (
+    "doge",
+    "shib",
+    "pepe",
+    "wif",
+    "bonk",
+    "floki",
+    "trump",
+    "popcat",
+    "mog",
+    "turbo",
+    "pengu",
+    "fartcoin",
+    "meme",
+)
 
 
 def _heading(number: int, title: str, subtitle: str) -> str:
@@ -77,6 +120,13 @@ class Series:
     symbol: str
     dates: list[str]
     closes: list[float]
+    domain: Domain = Domain.CRYPTO
+    # Crypto trades every day; equities do not. Getting this wrong inflates an
+    # equity Sharpe by about 20%.
+    periods_per_year: int = 365
+
+    def annualised(self, per_observation_sharpe: float) -> float:
+        return per_observation_sharpe * self.periods_per_year**0.5
 
     def sma(self, window: int, i: int) -> float:
         return sum(self.closes[i - window + 1 : i + 1]) / window
@@ -102,14 +152,85 @@ class Series:
         ]
 
 
-def load_series(symbol: str) -> Series:
-    path = DATA / f"kraken_{symbol}_usd_daily.csv"
+def _read(path: Path, symbol: str, domain: Domain, periods: int) -> Series:
     with path.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     return Series(
-        symbol=symbol.upper(),
+        symbol=symbol,
         dates=[r["date"] for r in rows],
         closes=[float(r["close"]) for r in rows],
+        domain=domain,
+        periods_per_year=periods,
+    )
+
+
+def load_series(symbol: str) -> Series:
+    """A Kraken crypto pair — the majors and the memecoins share a format."""
+    domain = Domain.MEME if symbol in MEMECOINS else Domain.CRYPTO
+    return _read(DATA / f"kraken_{symbol}_usd_daily.csv", symbol.upper(), domain, 365)
+
+
+def load_equity(ticker: str) -> Series:
+    """A Yahoo ticker, on **adjusted** closes.
+
+    Adjusted matters more than it sounds: a raw close gaps on every dividend
+    and split, and a crossover rule will cheerfully "predict" a gap that was
+    never tradeable.
+    """
+    return _read(
+        DATA / f"yahoo_{ticker.lower()}_daily.csv", ticker.upper(), Domain.EQUITY, 252
+    )
+
+
+@dataclass(frozen=True)
+class GridResult:
+    """What a parameter sweep actually produced — winner and everything else.
+
+    The losing cells are kept deliberately. They are not waste: their spread is
+    what sets the scale of the overfitting correction, and discarding them is
+    the mechanical form of the mistake this package exists to prevent.
+    """
+
+    winner: Series
+    fast: int
+    slow: int
+    sharpe: float
+    returns: list[float]
+    cell_sharpes: list[float]
+
+    @property
+    def trials(self) -> int:
+        return len(self.cell_sharpes)
+
+    @property
+    def dispersion(self) -> float:
+        return measure_trial_dispersion(self.cell_sharpes)
+
+    @property
+    def median_cell(self) -> float:
+        return sorted(self.cell_sharpes)[len(self.cell_sharpes) // 2]
+
+
+def run_grid(universe: list[Series], register: TrialRegister, label: str) -> GridResult:
+    """Every cell in :data:`GRID` against every series, all of it registered."""
+    best: Optional[GridResult] = None
+    cells: list[float] = []
+    for series in universe:
+        if len(series.closes) <= WARMUP + 60:
+            continue  # too little post-warmup history to score fairly
+        for fast, slow in GRID:
+            register.register(label, f"{series.symbol} {fast}/{slow}")
+            returns = [r for _, _, r in series.crossover(fast, slow)]
+            sharpe = _sharpe(returns)
+            cells.append(sharpe)
+            if best is None or sharpe > best.sharpe:
+                best = GridResult(series, fast, slow, sharpe, returns, cells)
+    if best is None:
+        raise ValueError("no series had enough history to search")
+    # `cells` is shared by reference above; rebind so the winner sees the full
+    # list rather than the prefix that existed when it won.
+    return GridResult(
+        best.winner, best.fast, best.slow, best.sharpe, best.returns, cells
     )
 
 
@@ -120,7 +241,7 @@ def _journal_crossover(path: Path, series: Series, fast: int, slow: int) -> list
         gap = series.sma(fast, i) / series.sma(slow, i) - 1
         decision = journal.append(
             Decision(
-                domain=Domain.CRYPTO,
+                domain=series.domain,
                 instrument=f"{series.symbol}-USD",
                 side=Side.LONG if position > 0 else Side.SHORT,
                 # A crossover has no probability of its own; the distance
@@ -168,7 +289,7 @@ def example_one_textbook_crossover(workdir: Path) -> Verdict:
         f"\n  decisions journalled  {score.n}\n"
         f"  hit rate              {score.hit_rate:.1%}\n"
         f"  per-obs Sharpe        {score.sharpe:+.4f}   "
-        f"(≈{score.sharpe * (365 ** 0.5):+.2f} annualised)\n"
+        f"(≈{btc.annualised(score.sharpe):+.2f} annualised)\n"
         f"  compounded return     {_compounded([p.signed_return for p in pairs]):+.1%}\n"
         f"  buy-and-hold Sharpe   {_sharpe(hold):+.4f}   "
         f"(BTC itself returned {_compounded(hold):+.1%} over the same window)\n"
@@ -205,34 +326,22 @@ def example_two_real_grid_search(workdir: Path) -> tuple[Verdict, Verdict, dict]
     )
 
     register = TrialRegister()
-    cell_sharpes: list[float] = []
-    best: tuple[float, int, int] = (-99.0, 0, 0)
-    for fast in range(5, 105, 5):
-        for slow in range(20, 210, 10):
-            if slow <= fast:
-                continue
-            register.register("sma-grid", f"{fast}/{slow}")
-            sharpe = _sharpe([r for _, _, r in btc.crossover(fast, slow)])
-            cell_sharpes.append(sharpe)
-            if sharpe > best[0]:
-                best = (sharpe, fast, slow)
-
-    best_sr, fast, slow = best
-    dispersion = measure_trial_dispersion(cell_sharpes)
+    grid = run_grid([btc], register, "sma-grid")
+    fast, slow, best_sr = grid.fast, grid.slow, grid.sharpe
     pairs = _journal_crossover(workdir / "grid.jsonl", btc, fast, slow)
     score = overall(pairs)
 
     print(
-        f"\n  cells tried            {register.count}\n"
+        f"\n  cells tried            {grid.trials}\n"
         f"  best cell              SMA {fast}/{slow}\n"
         f"  its hit rate           {score.hit_rate:.1%}\n"
         f"  its per-obs Sharpe     {best_sr:+.4f}   "
-        f"(≈{best_sr * (365 ** 0.5):+.2f} annualised)\n"
-        f"  median cell            {sorted(cell_sharpes)[len(cell_sharpes) // 2]:+.4f}\n"
-        f"  Sharpe spread across all {register.count} cells: {dispersion:.4f}"
+        f"(≈{btc.annualised(best_sr):+.2f} annualised)\n"
+        f"  median cell            {grid.median_cell:+.4f}\n"
+        f"  Sharpe spread across all {grid.trials} cells: {grid.dispersion:.4f}"
     )
 
-    guard = OverfittingGuard(register, sr_std_across_trials=dispersion)
+    guard = OverfittingGuard(register, sr_std_across_trials=grid.dispersion)
     naive = guard.evaluate(best_sr, n_observations=score.n, n_trials=1)
     honest = guard.evaluate(best_sr, n_observations=score.n)
 
@@ -241,7 +350,7 @@ def example_two_real_grid_search(workdir: Path) -> tuple[Verdict, Verdict, dict]
         + "\n".join("  " + line for line in naive.report().splitlines())
     )
     print(
-        f"\n  Counting all {register.count} attempts:\n"
+        f"\n  Counting all {grid.trials} attempts:\n"
         + "\n".join("  " + line for line in honest.report().splitlines())
     )
 
@@ -414,23 +523,216 @@ def example_three_real_polymarket(workdir: Path, *, taker_cost: float = 0.01) ->
     return verdict
 
 
+# --------------------------------------------------------------------------- 4
+
+
+def example_four_equities(workdir: Path) -> tuple[Verdict, Verdict]:
+    """Stocks, where the trap is different.
+
+    Crypto over this window went nowhere, so a strategy's Sharpe could be read
+    against zero without doing much damage. Equities drifted up hard. A rule
+    that is long most of the time inherits that drift and reports it as skill,
+    so zero is the wrong bar — **the index is the bar.**
+    """
+    universe = [load_equity(t) for t in EQUITIES]
+    spy = universe[0]
+    window = f"{spy.dates[WARMUP + 1]} → {spy.dates[-1]}"
+    print(
+        _heading(
+            4,
+            "Stocks — where zero is the wrong bar",
+            f"{len(universe)} US tickers, Yahoo adjusted closes, {window}",
+        )
+    )
+
+    hold = spy.buy_and_hold()
+    print(
+        f"\n  sessions scored        {len(hold)}\n"
+        f"  SPY buy-and-hold       Sharpe {_sharpe(hold):+.4f}   "
+        f"(≈{spy.annualised(_sharpe(hold)):+.2f} annualised, {_compounded(hold):+.1%} total)\n"
+        "  — that is what doing nothing earned. Anything below it is a worse\n"
+        "    idea than an index fund, however good its Sharpe looks alone."
+    )
+
+    register = TrialRegister()
+    grid = run_grid(universe, register, "equity-sma-grid")
+    winner = grid.winner
+    pairs = _journal_crossover(workdir / "equity.jsonl", winner, grid.fast, grid.slow)
+    score = overall(pairs)
+
+    print(
+        f"\n  cells tried            {grid.trials}   "
+        f"({len(GRID)} parameter pairs × {len(universe)} tickers)\n"
+        f"  best cell              {winner.symbol} SMA {grid.fast}/{grid.slow}\n"
+        f"  its per-obs Sharpe     {grid.sharpe:+.4f}   "
+        f"(≈{winner.annualised(grid.sharpe):+.2f} annualised)\n"
+        f"  compounded             {_compounded(grid.returns):+.1%}\n"
+        f"  median cell            {grid.median_cell:+.4f}\n"
+        f"  hit rate               {score.hit_rate:.1%}"
+    )
+
+    guard = OverfittingGuard(register, sr_std_across_trials=grid.dispersion)
+    against_zero = guard.evaluate(grid.sharpe, n_observations=score.n)
+    print(
+        "\n  Judged against zero, counting the search:\n"
+        + "\n".join("  " + line for line in against_zero.report().splitlines())
+    )
+
+    # The honest question is not "did it make money" but "did it beat owning
+    # the thing", so score the difference, not the level.
+    own = winner.buy_and_hold()
+    excess = [a - b for a, b in zip(grid.returns, own)]
+    against_index = guard.evaluate(_sharpe(excess), n_observations=len(excess))
+    print(
+        f"\n  Judged against buy-and-hold {winner.symbol} "
+        f"(Sharpe {_sharpe(own):+.4f}, {_compounded(own):+.1%}):\n"
+        + "\n".join("  " + line for line in against_index.report().splitlines())
+    )
+    print(
+        f"\n  The winner of {grid.trials} attempts does not beat holding the ticker\n"
+        "  it was fitted to. In a rising market almost any long-biased rule\n"
+        "  posts a respectable Sharpe, and reporting it against zero is how a\n"
+        "  strategy that destroys value gets promoted."
+    )
+    return against_zero, against_index
+
+
+# --------------------------------------------------------------------------- 5
+
+
+@dataclass(frozen=True)
+class MemeToken:
+    id: str
+    symbol: str
+    market_cap_usd: float
+    pct_below_ath: float
+    ath_date: str
+
+
+def load_meme_universe() -> list[MemeToken]:
+    path = DATA / "coingecko_meme_tokens.csv"
+    with path.open(encoding="utf-8") as handle:
+        return [
+            MemeToken(
+                id=r["id"],
+                symbol=r["symbol"],
+                market_cap_usd=float(r["market_cap_usd"]),
+                pct_below_ath=float(r["pct_below_ath"]),
+                ath_date=r["ath_date"],
+            )
+            for r in csv.DictReader(handle)
+        ]
+
+
+def example_five_memecoins(workdir: Path) -> tuple[Verdict, Verdict]:
+    """Memecoins, where the data itself is the problem.
+
+    Every number below is drawn from coins that are *listed today*. The ones
+    that went to zero and were delisted are not in this file, cannot be put in
+    it from any free source, and would drag every figure down. Read what
+    follows as the best case, measured on the survivors.
+    """
+    universe = [load_series(name) for name in MEMECOINS]
+    print(
+        _heading(
+            5,
+            "Memecoins — where the sample is the problem",
+            f"all {len(universe)} memecoins Kraken lists against USD",
+        )
+    )
+
+    print("\n  Every one of them, from its first Kraken bar to today:")
+    losers = 0
+    for series in sorted(universe, key=lambda s: -len(s.closes)):
+        moves = [
+            series.closes[i + 1] / series.closes[i] - 1
+            for i in range(len(series.closes) - 1)
+        ]
+        total = _compounded(moves)
+        losers += total < 0
+        print(
+            f"    {series.symbol:<9} {len(series.closes):>4} bars from {series.dates[0]}"
+            f"   {total:>+8.1%}   daily vol {stdev(moves):.3f}"
+        )
+    print(
+        f"\n  {losers} of {len(universe)} lost money — and these are the ones that\n"
+        "  made it onto a major exchange and stayed there."
+    )
+
+    register = TrialRegister()
+    grid = run_grid(universe, register, "meme-sma-grid")
+    winner = grid.winner
+    pairs = _journal_crossover(workdir / "meme.jsonl", winner, grid.fast, grid.slow)
+    score = overall(pairs)
+
+    print(
+        f"\n  Now search it the way an adaptive system would:\n"
+        f"    cells tried          {grid.trials}   "
+        f"({len(GRID)} parameter pairs × {len(universe)} coins)\n"
+        f"    best cell            {winner.symbol} SMA {grid.fast}/{grid.slow}\n"
+        f"    its per-obs Sharpe   {grid.sharpe:+.4f}   "
+        f"(≈{winner.annualised(grid.sharpe):+.2f} annualised)\n"
+        f"    compounded           {_compounded(grid.returns):+.1%}   ← on {score.n} days\n"
+        f"    median cell          {grid.median_cell:+.4f}"
+    )
+
+    guard = OverfittingGuard(register, sr_std_across_trials=grid.dispersion)
+    naive = guard.evaluate(grid.sharpe, n_observations=score.n, n_trials=1)
+    honest = guard.evaluate(grid.sharpe, n_observations=score.n)
+    print(
+        "\n  Reporting only the winner:\n"
+        + "\n".join("  " + line for line in naive.report().splitlines())
+    )
+    print(
+        f"\n  Counting all {grid.trials} attempts:\n"
+        + "\n".join("  " + line for line in honest.report().splitlines())
+    )
+
+    tokens = load_meme_universe()
+    drawdowns = sorted(t.pct_below_ath for t in tokens)
+    deep = sum(1 for d in drawdowns if d < -90) / len(drawdowns)
+    dead = sum(1 for d in drawdowns if d < -99) / len(drawdowns)
+    print(
+        f"\n  And the sample itself. Of {len(tokens):,} meme tokens CoinGecko lists\n"
+        f"  right now — every one of them a survivor:\n"
+        f"    median distance below its peak   {median(drawdowns):.1f}%\n"
+        f"    down more than 90% from peak     {deep:.1%}\n"
+        f"    down more than 99% from peak     {dead:.1%}"
+    )
+    print(
+        "\n  The ones that went to zero and got delisted are in none of these\n"
+        "  numbers, and no free source will hand them to you. So the true\n"
+        "  distribution is worse than the worst figure above, by an amount this\n"
+        "  data cannot measure. That is not a reason to model it more carefully;\n"
+        "  it is the reason the evidence review defers this domain outright."
+    )
+    return naive, honest
+
+
 def main() -> None:
     btc = load_series("btc")
+    spy = load_equity("SPY")
     markets = load_markets()
-    print("Three runs through services/decisions, on real market data.")
+    print("Five runs through services/decisions, on real market data.")
     print(
-        f"Kraken daily closes {btc.dates[0]} → {btc.dates[-1]} ({len(btc.closes)} bars); "
-        f"{len(markets)} settled Polymarket binaries."
+        f"Kraken daily closes {btc.dates[0]} → {btc.dates[-1]} "
+        f"({len(btc.closes)} bars, 3 majors + {len(MEMECOINS)} memecoins); "
+        f"Yahoo adjusted closes for {len(EQUITIES)} tickers "
+        f"({spy.dates[0]} → {spy.dates[-1]}); "
+        f"{len(markets)} settled Polymarket binaries; "
+        f"{len(load_meme_universe()):,} listed meme tokens."
     )
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         example_one_textbook_crossover(workdir)
         example_two_real_grid_search(workdir)
         example_three_real_polymarket(workdir)
+        example_four_equities(workdir)
+        example_five_memecoins(workdir)
     print(
-        f"\n{RULE}\nThree real datasets, no edge demonstrated in any of them. That is\n"
-        "the expected result, and it is the reason to log before you trade\n"
-        f"rather than after.\n{RULE}"
+        f"\n{RULE}\nFour domains, five real datasets, no edge demonstrated in any of\n"
+        "them. That is the expected result, and it is the reason to log before\n"
+        f"you trade rather than after.\n{RULE}"
     )
 
 

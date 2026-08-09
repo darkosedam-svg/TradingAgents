@@ -9,19 +9,31 @@ rather than leaving the commentary quietly wrong.
 
 from dataclasses import replace
 from pathlib import Path
+from statistics import median
 
 import pytest
 
+from services.decisions.record import Domain
+from services.decisions.trials import TrialRegister
 from services.decisions.real_examples import (
+    EQUITIES,
+    GRID,
+    MEMECOINS,
     WARMUP,
     Market,
+    _compounded,
     back_the_favourite,
     example_one_textbook_crossover,
     example_three_real_polymarket,
     example_two_real_grid_search,
+    example_four_equities,
+    example_five_memecoins,
+    load_equity,
     load_markets,
+    load_meme_universe,
     load_series,
     main,
+    run_grid,
 )
 
 
@@ -129,5 +141,78 @@ def test_losing_is_not_a_fee_problem(tmp_path: Path):
 def test_the_whole_real_demo_runs(capsys):
     main()
     out = capsys.readouterr().out
-    assert out.count("EXAMPLE") == 3
+    assert out.count("EXAMPLE") == 5
     assert "Kraken daily closes" in out
+    assert "Yahoo adjusted closes" in out
+
+
+# ------------------------------------------------- equities and memecoins
+
+
+def test_equity_series_load_on_adjusted_closes():
+    for ticker in EQUITIES:
+        series = load_equity(ticker)
+        assert series.domain is Domain.EQUITY
+        assert series.periods_per_year == 252, "equities do not trade 365 days"
+        assert len(series.closes) > WARMUP + 60
+        assert all(c > 0 for c in series.closes)
+
+
+def test_memecoin_series_are_tagged_as_such():
+    for name in MEMECOINS:
+        series = load_series(name)
+        assert series.domain is Domain.MEME
+    assert load_series("btc").domain is Domain.CRYPTO
+
+
+def test_a_grid_keeps_every_losing_cell():
+    """The losing cells set the scale of the correction. Dropping them is the
+    mechanical form of the mistake this package exists to prevent."""
+    register = TrialRegister()
+    grid = run_grid([load_equity("SPY"), load_equity("KO")], register, "t")
+
+    assert grid.trials == len(GRID) * 2 == register.count
+    assert grid.sharpe == max(grid.cell_sharpes)
+    assert grid.median_cell < grid.sharpe
+    assert grid.dispersion > 0
+
+
+def test_the_equity_winner_does_not_beat_holding_the_index(tmp_path: Path):
+    against_zero, against_index = example_four_equities(tmp_path)
+
+    assert against_zero.n_trials == len(GRID) * len(EQUITIES)
+    assert against_index.n_trials == against_zero.n_trials
+    assert not against_zero.passed
+    assert not against_index.passed
+    # The prose turns on this: measured against the index rather than zero, the
+    # winner of thousands of attempts is worse than doing nothing.
+    assert against_index.observed_sr < against_zero.observed_sr
+
+
+def test_every_listed_memecoin_lost_money():
+    """These are the survivors — listed on a major exchange and still there.
+    If a refresh makes this false, example 5's commentary needs rewriting."""
+    for name in MEMECOINS:
+        series = load_series(name)
+        moves = [
+            series.closes[i + 1] / series.closes[i] - 1
+            for i in range(len(series.closes) - 1)
+        ]
+        assert _compounded(moves) < 0, f"{name} is no longer a loser"
+
+
+def test_the_meme_search_passes_only_with_the_trials_hidden(tmp_path: Path):
+    naive, honest = example_five_memecoins(tmp_path)
+
+    assert naive.observed_sr == honest.observed_sr
+    assert naive.passed, "the winner looks excellent reported alone"
+    assert not honest.passed, "...and does not survive its own trial count"
+    assert "the search itself is the problem" in honest.reason
+
+
+def test_the_meme_universe_is_all_survivors_and_still_grim():
+    tokens = load_meme_universe()
+    assert len(tokens) > 500
+    below = [t.pct_below_ath for t in tokens]
+    assert max(below) <= 0, "nothing can be above its own all-time high"
+    assert median(below) < -50

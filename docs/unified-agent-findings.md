@@ -30,7 +30,7 @@ crypto→equity linkage was refuted 0–3.
 | Bigger, more general models do not buy edge | 3–0 | Keep a dumb baseline in every comparison |
 | The self-improving loop is the biggest hazard | 3–0 | Count trials; deflate for the search |
 | Polymarket: read it, don't trade it | 2–1 | Use odds as an input feature, not an alert-and-cross-the-spread venue |
-| Memecoin data can't be backtested as collected | 3–0 | Defer the memecoin domain |
+| Memecoin data can't be backtested as collected | 3–0 | Defer the memecoin domain — **now measured, see below** |
 | Session/holiday alignment is solved and free | 3–0 | Use `pandas_market_calendars`; don't write it |
 
 ### The cross-market finding, in detail
@@ -97,6 +97,49 @@ those 354 markets was **84.2% accurate and lost $14.77 per $354 staked** — and
 lost $12.19 of that at literally zero trading cost. Being right is not the same
 as being paid.
 
+### Memecoin survivorship, in detail
+
+The research round asserted that memecoin data cannot be backtested as
+collected. That is now measured rather than asserted, from data pulled 9 Aug
+2026 ([`services/decisions/real_examples.py`](../services/decisions/real_examples.py),
+example 5).
+
+Kraken lists exactly **thirteen** memecoins against USD. From each one's first
+bar to today, **all thirteen lost money** — DOGE −31%, SHIB −66%, PEPE −63%,
+WIF −90%, BONK −85%, FLOKI −82%, TURBO −80%, MEME −95%, POPCAT −95%, MOG −95%,
+TRUMP −95%, FARTCOIN −91%, PENGU −60%. Those are the names that reached a major
+exchange and stayed listed.
+
+Widening to every meme token CoinGecko currently lists — 999 of them, all
+survivors — the median sits **95.9% below its own peak**; 66.9% are down more
+than 90%, and 21.8% down more than 99%.
+
+The tokens that went to zero and were delisted appear in none of these figures,
+and no free source will produce them. The true distribution is therefore worse
+than the worst number above **by an amount this data cannot measure**. That is
+the finding: not that memecoins are a bad bet, but that the available sample
+cannot tell you how bad, so no backtest built on it means anything.
+
+A grid search over all thirteen — 3,887 cells — finds TRUMP SMA 70/80 at a
+per-observation Sharpe of 0.108, compounding **+281% over 368 days**. Reported
+alone its deflated Sharpe is 0.980, a clean pass. Counted against its own 3,887
+attempts it is 0.332, below a no-skill benchmark of 0.131. **This is the only
+case in the example set where the uncorrected verdict says yes** — which is
+precisely how a system without a trial counter ends up trading it.
+
+### Equities: the benchmark is not zero
+
+Not from the research round; it fell out of running the same machinery on real
+equity data (example 4). Over Mar 2025 → Aug 2026 SPY returned +33.4% at a
+per-session Sharpe of 0.127. A 2,392-cell sweep across eight tickers produced a
+winner at Sharpe 0.119 — respectable in isolation, **worse than owning the
+ticker it was fitted to** (excess Sharpe −0.051).
+
+Crypto over the same window went nowhere, so reading a Sharpe against zero did
+little harm there. In a drifting market it does: any long-biased rule inherits
+the drift and reports it as skill. Wherever a domain has a passive alternative,
+that alternative is the bar.
+
 ## What was killed
 
 Almost every claim a build case would want to lean on:
@@ -154,9 +197,9 @@ different from disproven.
 5. **Only then the learning loop, with brakes.** Trial count, minimum sample,
    deflated threshold.
 6. **Defer indefinitely: memecoins and auto-execution.** Memecoins because you
-   cannot backtest what you collect. Auto-execution because nothing has yet
-   established an edge worth automating — revisit after step 3 produces a real
-   number.
+   cannot backtest what you collect — now demonstrated, not assumed.
+   Auto-execution because nothing has yet established an edge worth automating
+   — revisit after step 3 produces a real number.
 
 ## How much to trust this
 
