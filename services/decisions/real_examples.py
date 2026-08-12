@@ -45,6 +45,16 @@ from statistics import fmean, median, stdev
 from typing import Optional
 
 from .journal import DecisionJournal, Pair
+from .prices import (
+    DATA,
+    EQUITIES,
+    MEMECOINS,
+    Series,
+    compounded,
+    load_equity,
+    load_series,
+    sharpe,
+)
 from .record import Decision, Domain, Realisation, Side
 from .scoring import calibration, overall
 from .trials import (
@@ -54,7 +64,6 @@ from .trials import (
     measure_trial_dispersion,
 )
 
-DATA = Path(__file__).parent / "data"
 RULE = "─" * 74
 
 # Every moving-average cell is scored over the same window, so no cell gets a
@@ -71,115 +80,9 @@ GRID = tuple(
     if slow > fast
 )
 
-EQUITIES = ("SPY", "QQQ", "AAPL", "MSFT", "NVDA", "JPM", "KO", "XOM")
-
-# Every memecoin Kraken lists against USD. Thirteen names is the whole
-# investable universe on a major exchange, and that is itself the finding.
-MEMECOINS = (
-    "doge",
-    "shib",
-    "pepe",
-    "wif",
-    "bonk",
-    "floki",
-    "trump",
-    "popcat",
-    "mog",
-    "turbo",
-    "pengu",
-    "fartcoin",
-    "meme",
-)
-
 
 def _heading(number: int, title: str, subtitle: str) -> str:
     return f"\n{RULE}\nEXAMPLE {number} — {title}\n{subtitle}\n{RULE}"
-
-
-def _sharpe(returns: list[float]) -> float:
-    if len(returns) < 2:
-        return 0.0
-    spread = stdev(returns)
-    return fmean(returns) / spread if spread > 0 else 0.0
-
-
-def _compounded(returns: list[float]) -> float:
-    """Total return from reinvesting each day. Summing daily percentages is
-    the flattering version and it is wrong by tens of points over two years."""
-    total = 1.0
-    for r in returns:
-        total *= 1.0 + r
-    return total - 1.0
-
-
-# ------------------------------------------------------------------ price data
-
-
-@dataclass(frozen=True)
-class Series:
-    symbol: str
-    dates: list[str]
-    closes: list[float]
-    domain: Domain = Domain.CRYPTO
-    # Crypto trades every day; equities do not. Getting this wrong inflates an
-    # equity Sharpe by about 20%.
-    periods_per_year: int = 365
-
-    def annualised(self, per_observation_sharpe: float) -> float:
-        return per_observation_sharpe * self.periods_per_year**0.5
-
-    def sma(self, window: int, i: int) -> float:
-        return sum(self.closes[i - window + 1 : i + 1]) / window
-
-    def crossover(self, fast: int, slow: int) -> list[tuple[int, int, float]]:
-        """Run a moving-average crossover. Returns ``(index, position, return)``.
-
-        The signal is computed from closes up to and including day ``i``, and
-        the return is day ``i+1``'s. Nothing from the future touches the
-        decision — the same guarantee the journal enforces structurally.
-        """
-        out = []
-        for i in range(WARMUP, len(self.closes) - 1):
-            position = 1 if self.sma(fast, i) > self.sma(slow, i) else -1
-            move = self.closes[i + 1] / self.closes[i] - 1
-            out.append((i, position, position * move))
-        return out
-
-    def buy_and_hold(self) -> list[float]:
-        return [
-            self.closes[i + 1] / self.closes[i] - 1
-            for i in range(WARMUP, len(self.closes) - 1)
-        ]
-
-
-def _read(path: Path, symbol: str, domain: Domain, periods: int) -> Series:
-    with path.open(encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    return Series(
-        symbol=symbol,
-        dates=[r["date"] for r in rows],
-        closes=[float(r["close"]) for r in rows],
-        domain=domain,
-        periods_per_year=periods,
-    )
-
-
-def load_series(symbol: str) -> Series:
-    """A Kraken crypto pair — the majors and the memecoins share a format."""
-    domain = Domain.MEME if symbol in MEMECOINS else Domain.CRYPTO
-    return _read(DATA / f"kraken_{symbol}_usd_daily.csv", symbol.upper(), domain, 365)
-
-
-def load_equity(ticker: str) -> Series:
-    """A Yahoo ticker, on **adjusted** closes.
-
-    Adjusted matters more than it sounds: a raw close gaps on every dividend
-    and split, and a crossover rule will cheerfully "predict" a gap that was
-    never tradeable.
-    """
-    return _read(
-        DATA / f"yahoo_{ticker.lower()}_daily.csv", ticker.upper(), Domain.EQUITY, 252
-    )
 
 
 @dataclass(frozen=True)
@@ -220,11 +123,11 @@ def run_grid(universe: list[Series], register: TrialRegister, label: str) -> Gri
             continue  # too little post-warmup history to score fairly
         for fast, slow in GRID:
             register.register(label, f"{series.symbol} {fast}/{slow}")
-            returns = [r for _, _, r in series.crossover(fast, slow)]
-            sharpe = _sharpe(returns)
-            cells.append(sharpe)
-            if best is None or sharpe > best.sharpe:
-                best = GridResult(series, fast, slow, sharpe, returns, cells)
+            returns = [r for _, _, r in series.crossover(fast, slow, start=WARMUP)]
+            cell = sharpe(returns)
+            cells.append(cell)
+            if best is None or cell > best.sharpe:
+                best = GridResult(series, fast, slow, cell, returns, cells)
     if best is None:
         raise ValueError("no series had enough history to search")
     # `cells` is shared by reference above; rebind so the winner sees the full
@@ -237,7 +140,7 @@ def run_grid(universe: list[Series], register: TrialRegister, label: str) -> Gri
 def _journal_crossover(path: Path, series: Series, fast: int, slow: int) -> list[Pair]:
     """Write the run through the real journal, one decision per trading day."""
     journal = DecisionJournal(path)
-    for i, position, _signed in series.crossover(fast, slow):
+    for i, position, _signed in series.crossover(fast, slow, start=WARMUP):
         gap = series.sma(fast, i) / series.sma(slow, i) - 1
         decision = journal.append(
             Decision(
@@ -283,16 +186,16 @@ def example_one_textbook_crossover(workdir: Path) -> Verdict:
     pairs = _journal_crossover(workdir / "btc.jsonl", btc, 20, 50)
     score = overall(pairs)
     calib = calibration(pairs)
-    hold = btc.buy_and_hold()
+    hold = btc.buy_and_hold(start=WARMUP)
 
     print(
         f"\n  decisions journalled  {score.n}\n"
         f"  hit rate              {score.hit_rate:.1%}\n"
         f"  per-obs Sharpe        {score.sharpe:+.4f}   "
         f"(≈{btc.annualised(score.sharpe):+.2f} annualised)\n"
-        f"  compounded return     {_compounded([p.signed_return for p in pairs]):+.1%}\n"
-        f"  buy-and-hold Sharpe   {_sharpe(hold):+.4f}   "
-        f"(BTC itself returned {_compounded(hold):+.1%} over the same window)\n"
+        f"  compounded return     {compounded([p.signed_return for p in pairs]):+.1%}\n"
+        f"  buy-and-hold Sharpe   {sharpe(hold):+.4f}   "
+        f"(BTC itself returned {compounded(hold):+.1%} over the same window)\n"
         f"  overconfidence        {calib.overconfidence:+.3f}   Brier {calib.brier:.3f}"
     )
 
@@ -358,15 +261,15 @@ def example_two_real_grid_search(workdir: Path) -> tuple[Verdict, Verdict, dict]
     holdout: dict[str, Verdict] = {}
     for symbol in ("eth", "sol"):
         series = load_series(symbol)
-        returns = [r for _, _, r in series.crossover(fast, slow)]
-        sharpe = _sharpe(returns)
+        returns = [r for _, _, r in series.crossover(fast, slow, start=WARMUP)]
+        out_of_sample = sharpe(returns)
         # One pre-registered cell per coin, so the honest trial count is 1 —
         # with the caveat printed below.
-        verdict = OverfittingGuard().evaluate(sharpe, n_observations=len(returns))
+        verdict = OverfittingGuard().evaluate(out_of_sample, n_observations=len(returns))
         holdout[series.symbol] = verdict
         print(
-            f"    {series.symbol:<4} Sharpe {sharpe:+.4f}  "
-            f"compounded {_compounded(returns):+.1%}  "
+            f"    {series.symbol:<4} Sharpe {out_of_sample:+.4f}  "
+            f"compounded {compounded(returns):+.1%}  "
             f"deflated {verdict.dsr:.3f}  [{'PASS' if verdict.passed else 'FAIL'}]"
         )
     print(
@@ -545,11 +448,11 @@ def example_four_equities(workdir: Path) -> tuple[Verdict, Verdict]:
         )
     )
 
-    hold = spy.buy_and_hold()
+    hold = spy.buy_and_hold(start=WARMUP)
     print(
         f"\n  sessions scored        {len(hold)}\n"
-        f"  SPY buy-and-hold       Sharpe {_sharpe(hold):+.4f}   "
-        f"(≈{spy.annualised(_sharpe(hold)):+.2f} annualised, {_compounded(hold):+.1%} total)\n"
+        f"  SPY buy-and-hold       Sharpe {sharpe(hold):+.4f}   "
+        f"(≈{spy.annualised(sharpe(hold)):+.2f} annualised, {compounded(hold):+.1%} total)\n"
         "  — that is what doing nothing earned. Anything below it is a worse\n"
         "    idea than an index fund, however good its Sharpe looks alone."
     )
@@ -566,7 +469,7 @@ def example_four_equities(workdir: Path) -> tuple[Verdict, Verdict]:
         f"  best cell              {winner.symbol} SMA {grid.fast}/{grid.slow}\n"
         f"  its per-obs Sharpe     {grid.sharpe:+.4f}   "
         f"(≈{winner.annualised(grid.sharpe):+.2f} annualised)\n"
-        f"  compounded             {_compounded(grid.returns):+.1%}\n"
+        f"  compounded             {compounded(grid.returns):+.1%}\n"
         f"  median cell            {grid.median_cell:+.4f}\n"
         f"  hit rate               {score.hit_rate:.1%}"
     )
@@ -580,12 +483,12 @@ def example_four_equities(workdir: Path) -> tuple[Verdict, Verdict]:
 
     # The honest question is not "did it make money" but "did it beat owning
     # the thing", so score the difference, not the level.
-    own = winner.buy_and_hold()
+    own = winner.buy_and_hold(start=WARMUP)
     excess = [a - b for a, b in zip(grid.returns, own)]
-    against_index = guard.evaluate(_sharpe(excess), n_observations=len(excess))
+    against_index = guard.evaluate(sharpe(excess), n_observations=len(excess))
     print(
         f"\n  Judged against buy-and-hold {winner.symbol} "
-        f"(Sharpe {_sharpe(own):+.4f}, {_compounded(own):+.1%}):\n"
+        f"(Sharpe {sharpe(own):+.4f}, {compounded(own):+.1%}):\n"
         + "\n".join("  " + line for line in against_index.report().splitlines())
     )
     print(
@@ -648,7 +551,7 @@ def example_five_memecoins(workdir: Path) -> tuple[Verdict, Verdict]:
             series.closes[i + 1] / series.closes[i] - 1
             for i in range(len(series.closes) - 1)
         ]
-        total = _compounded(moves)
+        total = compounded(moves)
         losers += total < 0
         print(
             f"    {series.symbol:<9} {len(series.closes):>4} bars from {series.dates[0]}"
@@ -672,7 +575,7 @@ def example_five_memecoins(workdir: Path) -> tuple[Verdict, Verdict]:
         f"    best cell            {winner.symbol} SMA {grid.fast}/{grid.slow}\n"
         f"    its per-obs Sharpe   {grid.sharpe:+.4f}   "
         f"(≈{winner.annualised(grid.sharpe):+.2f} annualised)\n"
-        f"    compounded           {_compounded(grid.returns):+.1%}   ← on {score.n} days\n"
+        f"    compounded           {compounded(grid.returns):+.1%}   ← on {score.n} days\n"
         f"    median cell          {grid.median_cell:+.4f}"
     )
 

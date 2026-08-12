@@ -28,10 +28,12 @@ Stdlib only — `statistics.NormalDist` supplies the normal CDF and its inverse.
 
 from __future__ import annotations
 
+import json
 import math
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from statistics import NormalDist, stdev
 from typing import Optional, Sequence
 
@@ -57,10 +59,22 @@ class TrialRegister:
     Deliberately hard to decrement. The temptation when a result looks good is
     to forget the nineteen variants that came before it, and that forgetting is
     precisely what makes the twentieth look significant.
+
+    Pass ``path`` to persist. A register that lives only in memory resets to
+    zero every time the process restarts, so a strategy run daily from cron
+    would report one trial forever no matter how many variants had been tried
+    across the months — the exact failure this class exists to prevent.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, path: Optional[Path | str] = None) -> None:
+        self.path = Path(path) if path is not None else None
         self._trials: list[Trial] = []
+        if self.path is not None and self.path.exists():
+            self._trials = [
+                Trial(**json.loads(line))
+                for line in self.path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
 
     def register(self, strategy_id: str, description: str = "") -> Trial:
         trial = Trial(
@@ -70,7 +84,25 @@ class TrialRegister:
             ts=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
         self._trials.append(trial)
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(asdict(trial)) + "\n")
         return trial
+
+    def register_once(self, strategy_id: str, description: str = "") -> Trial:
+        """Register unless this exact variant is already on the books.
+
+        A trial is a distinct *attempt*, not a distinct *run*. Running the same
+        strategy again tomorrow is not a new roll of the dice, and counting it
+        as one would inflate the correction until nothing could ever pass. The
+        pair ``(strategy_id, description)`` is what identifies an attempt, so
+        describe your variants precisely enough to tell them apart.
+        """
+        for trial in self._trials:
+            if trial.strategy_id == strategy_id and trial.description == description:
+                return trial
+        return self.register(strategy_id, description)
 
     @property
     def count(self) -> int:
@@ -134,6 +166,24 @@ def measure_trial_dispersion(trial_sharpes: Sequence[float]) -> float:
             "search to correct for and the benchmark is simply zero"
         )
     return stdev(trial_sharpes)
+
+
+def no_skill_dispersion(n_observations: int) -> float:
+    """Spread of per-observation Sharpe estimates under no skill: ``1/√n``.
+
+    Use this when you cannot hand :func:`measure_trial_dispersion` the actual
+    per-cell results — a live track record, for instance, where the "trials"
+    are a handful of strategies rather than a grid you can enumerate. It is the
+    sampling standard deviation of the Sharpe estimator when true skill is
+    exactly zero, which is precisely the scale the correction needs.
+
+    It is an estimate of the null, not of your search. A grid whose cells
+    genuinely differ will disperse wider than this, and passing the measured
+    value is always better when you have it.
+    """
+    if n_observations < 2:
+        raise ValueError(f"n_observations must be >= 2, got {n_observations}")
+    return 1.0 / math.sqrt(n_observations)
 
 
 def deflated_sharpe_ratio(

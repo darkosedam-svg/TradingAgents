@@ -191,7 +191,9 @@ different from disproven.
    [`trials.py`](../services/decisions/trials.py)*
 3. **Pick one market and prove an edge exists.** Paper-traded, scored against
    reality for months. If you cannot beat a dumb baseline in one market, four
-   will not rescue it.
+   will not rescue it. — *loop implemented:
+   [`paper.py`](../services/decisions/paper.py), `python -m services.decisions
+   run`; the months are the part no code supplies.*
 4. **Add markets one at a time, pipelines separate.** Thin aggregator for
    ranking, sizing and correlation-aware exposure caps.
 5. **Only then the learning loop, with brakes.** Trial count, minimum sample,

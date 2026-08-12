@@ -16,7 +16,10 @@ Run it to refresh the committed CSVs::
 
 The output is committed so the examples stay reproducible and offline. Re-run
 it and the numbers in the examples will move — that is expected, and the
-examples print the date range they actually loaded.
+examples print the date range they actually loaded. Refresh **all** of it
+together rather than a few files at a time: the figures quoted in the README
+and the evidence review come from one snapshot, and a partial update leaves
+them silently describing a dataset that no longer exists.
 
 Stdlib only, like everything else here.
 """

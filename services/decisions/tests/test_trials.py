@@ -9,6 +9,7 @@ from services.decisions.trials import (
     expected_max_sharpe,
     measure_trial_dispersion,
     min_track_record_length,
+    no_skill_dispersion,
 )
 
 
@@ -244,3 +245,46 @@ def test_report_does_not_print_infinity_as_a_sample_size():
     guard = OverfittingGuard()
     report = guard.evaluate(-0.05, n_observations=500, n_trials=1).report()
     assert "inf" not in report
+
+
+def test_no_skill_dispersion_is_one_over_root_n():
+    assert no_skill_dispersion(100) == pytest.approx(0.1)
+    assert no_skill_dispersion(400) == pytest.approx(0.05)
+    assert no_skill_dispersion(400) < no_skill_dispersion(100)
+
+
+def test_no_skill_dispersion_needs_a_sample():
+    with pytest.raises(ValueError):
+        no_skill_dispersion(1)
+
+
+def test_a_register_with_no_path_stays_in_memory(tmp_path):
+    register = TrialRegister()
+    register.register("a", "x")
+    assert register.count == 1
+    assert not list(tmp_path.iterdir())
+
+
+def test_register_once_does_not_count_the_same_attempt_twice():
+    register = TrialRegister()
+    first = register.register_once("momentum", "20/50")
+    again = register.register_once("momentum", "20/50")
+    other = register.register_once("momentum", "10/30")
+
+    assert first is again
+    assert other is not first
+    assert register.count == 2
+
+
+def test_a_persisted_register_reloads_every_trial(tmp_path):
+    path = tmp_path / "trials.jsonl"
+    first = TrialRegister(path)
+    for i in range(4):
+        first.register("grid", f"cell {i}")
+
+    reloaded = TrialRegister(path)
+    assert reloaded.count == 4
+    assert [t.description for t in reloaded.trials] == [f"cell {i}" for i in range(4)]
+    # And it keeps appending rather than starting over.
+    reloaded.register("grid", "cell 4")
+    assert TrialRegister(path).count == 5

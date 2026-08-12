@@ -1,13 +1,14 @@
 # Decision records and the brake on the learning loop
 
-Three things, built in the order the evidence says to build them. **No
+Four things, built in the order the evidence says to build them. **No
 dependencies — stdlib only.** You should be able to use this before you have
 installed anything, spent anything, or decided what you're building.
 
-This implements steps 1 and 2 of the build order in the
+This implements steps 1–3 of the build order in the
 [evidence review](../../docs/unified-agent-findings.md). It is deliberately not
 a trading system: it records what a system decided, scores whether it was right,
-and refuses to let it reweight itself on noise.
+refuses to let it reweight itself on noise, and runs the daily loop that turns
+all of that into an actual track record.
 
 ## 1. A decision is separate from its execution
 
@@ -297,6 +298,82 @@ those numbers and no free source will produce them, so the true distribution is
 worse by an amount the data cannot measure. That is why the evidence review
 defers this domain rather than modelling it more carefully.
 
+## 7. The daily loop — where a track record actually comes from
+
+Everything above is measurement. This is the part that produces something to
+measure. Step 3 of the build order is *pick one market and prove an edge
+exists, paper-traded, scored against reality for months* — not a thing more
+code can do, but code can make the daily act cost nothing so it actually
+happens.
+
+```bash
+python -m services.decisions run       # fetch, resolve what's due, emit today
+python -m services.decisions status    # where the track record stands
+```
+
+```
+0 6 * * *  cd /path/to/repo && python -m services.decisions run >> paper.log
+```
+
+One run does two things **in this order**: resolve every decision whose horizon
+has elapsed, then emit today's. A decision written today cannot see an outcome
+recorded in the same pass — structural, not careful.
+
+```
+1071 scored decisions, 9 pending
+registered trials: 3
+
+strategy                   n     hit   sharpe     total     DSR
+baseline-coinflip        357  47.1%  -0.0034   -11.9%   0.180  (baseline)
+baseline-hold            357  48.5%  -0.0237   -25.7%   0.097  (baseline)
+sma-20-50                357  52.9%  +0.0047    -5.7%   0.223
+
+Against the baselines:
+  beats every baseline on Sharpe: sma-20-50
+  — necessary, not sufficient. The DSR column is the one that decides.
+
+Guard:
+  nothing clears the bar yet.
+```
+
+Note the third row: it beats both baselines and still lost 5.7%. Winning a
+comparison is not the same as making money, and the table shows both so neither
+can hide behind the other.
+
+### What the loop refuses to do
+
+- **Trade an unfinished bar.** Today's daily candle is a live price, not a
+  close. Decisions are written against the last *closed* bar.
+- **Emit twice in a day.** Running the job twice would double-count every
+  decision, flattering or damning a strategy purely on how often cron fired.
+- **Count a rerun as a new trial.** A trial is a distinct *attempt*, not a
+  distinct run. `TrialRegister.register_once` and a persisted `trials.jsonl`
+  keep the count honest across restarts — a register that lives only in memory
+  reports one trial forever, which is the exact failure the guard exists to
+  prevent.
+- **Guess at a missing bar.** No exit price yet means the decision stays
+  pending. Pending is an honest state; scoring against whatever bar happened to
+  be next is not. A Friday call on an equity is judged on Monday, and that date
+  is recorded.
+- **Run without baselines.** `AlwaysLong` and a date-seeded `Coinflip` ship in
+  the defaults. The coin flip cannot be re-rolled, because re-rolling a
+  baseline until it looks bad is the same cheat as re-rolling a strategy until
+  it looks good.
+- **Execute anything.** Decisions land in the journal. What reads the journal
+  is somebody else's problem, and today that is a person.
+
+### Backfill, and why it is fenced off
+
+```bash
+python -m services.decisions backfill --days 120
+```
+
+This replays history through the same loop, so you can see the wiring work
+without waiting months. **It is a backtest wearing the runner's clothes.** Every
+decision it writes is tagged `replayed`, and it raises rather than write into a
+journal that already holds live entries — months of hindsight sitting in the
+same file as a forward record would be indistinguishable to the guard.
+
 ## Caveats worth carrying
 
 - **Sharpe here is per-observation and not annualised.** Annualising a short,
@@ -308,6 +385,10 @@ defers this domain rather than modelling it more carefully.
   place rejects everything indiscriminately. Run the search, keep the Sharpe of
   every cell including the bad ones, and pass them to
   `measure_trial_dispersion`.
+- **Pooling instruments overstates your evidence.** Trading BTC, ETH and SOL
+  on the same days gives you three rows per day, not three independent
+  observations — they move together. `status` says so; the DSR is optimistic by
+  an amount it does not measure.
 - **The correction assumes roughly independent trials.** Twenty variants of one
   idea have a smaller effective N than twenty unrelated ideas, so the guard is
   optimistic when your search is correlated. Bailey's paper discusses estimating
@@ -324,7 +405,7 @@ defers this domain rather than modelling it more carefully.
 pytest services/decisions/tests -q
 ```
 
-89 tests, no network, no credentials, no dependencies — the real-data examples
+110 tests, no network, no credentials, no dependencies — the real-data examples
 read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a

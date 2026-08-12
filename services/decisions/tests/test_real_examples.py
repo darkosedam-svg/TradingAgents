@@ -13,25 +13,21 @@ from statistics import median
 
 import pytest
 
+from services.decisions.prices import EQUITIES, MEMECOINS, compounded, load_equity, load_series
 from services.decisions.record import Domain
 from services.decisions.trials import TrialRegister
 from services.decisions.real_examples import (
-    EQUITIES,
     GRID,
-    MEMECOINS,
     WARMUP,
     Market,
-    _compounded,
     back_the_favourite,
     example_one_textbook_crossover,
     example_three_real_polymarket,
     example_two_real_grid_search,
     example_four_equities,
     example_five_memecoins,
-    load_equity,
     load_markets,
     load_meme_universe,
-    load_series,
     main,
     run_grid,
 )
@@ -198,7 +194,7 @@ def test_every_listed_memecoin_lost_money():
             series.closes[i + 1] / series.closes[i] - 1
             for i in range(len(series.closes) - 1)
         ]
-        assert _compounded(moves) < 0, f"{name} is no longer a loser"
+        assert compounded(moves) < 0, f"{name} is no longer a loser"
 
 
 def test_the_meme_search_passes_only_with_the_trials_hidden(tmp_path: Path):
