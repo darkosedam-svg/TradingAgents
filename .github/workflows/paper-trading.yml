@@ -12,7 +12,9 @@
 
 name: paper trading
 
-on:
+# Quoted: bare `on` is boolean true under YAML 1.1. GitHub tolerates it,
+# every other YAML tool does not.
+"on":
   schedule:
     # 06:15 UTC. Kraken's daily bar closes at 00:00 UTC, so yesterday is
     # definitely settled by now. GitHub delays scheduled jobs under load and
