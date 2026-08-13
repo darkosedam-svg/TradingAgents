@@ -341,6 +341,21 @@ class OverfittingGuard:
         )
 
         benchmark = expected_max_sharpe(trials, std_sr=std)
+
+        # The sample-size check comes first because it is strictly prior: a
+        # deflated Sharpe cannot even be computed from fewer than two
+        # observations, and a guard that raised on day two of a single-market
+        # track record would be useless exactly when it starts being used.
+        if n_observations < max(2, self.min_observations):
+            return Verdict(
+                False, observed_sr, benchmark, 0.0, trials, n_observations,
+                min_track_record_length(
+                    observed_sr, target_sr=benchmark, skew=skew, kurtosis=kurtosis
+                ),
+                f"too few observations: {n_observations} < {self.min_observations}. "
+                "Collect more before moving any weight.",
+            )
+
         dsr = deflated_sharpe_ratio(
             observed_sr,
             n_trials=trials,
@@ -357,12 +372,6 @@ class OverfittingGuard:
             observed_sr, target_sr=benchmark, skew=skew, kurtosis=kurtosis
         )
 
-        if n_observations < self.min_observations:
-            return Verdict(
-                False, observed_sr, benchmark, dsr, trials, n_observations, needed,
-                f"too few observations: {n_observations} < {self.min_observations}. "
-                "Collect more before moving any weight.",
-            )
         if dsr < self.min_dsr:
             # Two quite different failures share one number, and telling the
             # operator which one they are looking at is the difference between

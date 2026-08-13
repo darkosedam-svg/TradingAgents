@@ -16,7 +16,9 @@ damn a strategy purely on how often cron fired.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from datetime import date
 from pathlib import Path
 
 from .journal import DecisionJournal
@@ -87,7 +89,30 @@ def main(argv: list[str] | None = None) -> int:
         default=90,
         help="backfill: how many days of history to replay",
     )
+    parser.add_argument(
+        "--today",
+        metavar="YYYY-MM-DD",
+        help=(
+            "pretend today is this date. For rehearsing the scheduled job "
+            "without waiting a day, and for catching up a run the scheduler "
+            "dropped. It moves the line between a closed bar and a live one, "
+            "so a date in the future would write decisions against prices "
+            "nobody could have traded — the record has no way to tell that "
+            "apart afterwards."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.today:
+        try:
+            date.fromisoformat(args.today)
+        except ValueError:
+            parser.error(f"--today must be YYYY-MM-DD, got {args.today!r}")
+        if args.today > date.today().isoformat():
+            parser.error(
+                f"--today is in the future ({args.today}). Decisions would be "
+                "written against bars that have not closed."
+            )
 
     journal, register = _paths(args.home)
 
@@ -111,11 +136,18 @@ def main(argv: list[str] | None = None) -> int:
         print(status(journal, register))
         return 0
 
-    print(run_once(journal, universe, strategies, register))
+    print(run_once(journal, universe, strategies, register, today=args.today))
     print()
     print(status(journal, register))
     return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # `status | head` closes the pipe early. That is a reader losing
+        # interest, not a failure — and a traceback here would look like the
+        # scheduled job had broken.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(0)

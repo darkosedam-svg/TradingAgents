@@ -332,3 +332,47 @@ def test_run_once_passes_its_clock_to_resolution(tmp_path: Path):
 
     assert same_day.resolved == 0, "resolved against a bar that had not closed"
     assert same_day.still_pending == 1
+
+
+# ----------------------------------------------------------------------- cli
+
+
+def test_the_cli_refuses_a_future_today(capsys):
+    """--today moves the line between a closed bar and a live one. A future
+    date would write decisions against prices nobody could have traded, and
+    the record has no way to tell that apart afterwards."""
+    from services.decisions.__main__ import main
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["run", "--today", "2099-01-01", "--offline"])
+
+    assert exit_info.value.code != 0
+    assert "future" in capsys.readouterr().err
+
+
+def test_the_cli_refuses_a_malformed_today(capsys):
+    from services.decisions.__main__ import main
+
+    with pytest.raises(SystemExit):
+        main(["run", "--today", "13-08-2026", "--offline"])
+    assert "YYYY-MM-DD" in capsys.readouterr().err
+
+
+def test_the_cli_drives_the_loop_at_a_chosen_date(tmp_path: Path, monkeypatch):
+    """Rehearsing the scheduled job, and catching up a run the scheduler
+    dropped, are the same operation."""
+    from services.decisions import __main__ as cli
+
+    series = ramp(40)
+    monkeypatch.setattr(cli, "_universe", lambda symbols, home: {"TEST-USD": series})
+
+    assert cli.main(["run", "--home", str(tmp_path), "--offline",
+                     "--today", series.dates[-3]]) == 0
+    first = DecisionJournal(tmp_path / "decisions.jsonl").decisions()
+    assert [d.meta["as_of"] for d in first] == [series.dates[-4]] * len(first)
+
+    assert cli.main(["run", "--home", str(tmp_path), "--offline",
+                     "--today", series.dates[-2]]) == 0
+    journal = DecisionJournal(tmp_path / "decisions.jsonl")
+    assert len(journal.pairs()) == len(first), "the earlier day should now resolve"
+    assert len(journal.pending()) == len(first), "and a new day should be pending"
