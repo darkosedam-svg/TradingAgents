@@ -311,9 +311,66 @@ python -m services.decisions run       # fetch, resolve what's due, emit today
 python -m services.decisions status    # where the track record stands
 ```
 
+### Scheduling it
+
+The job is set up as a GitHub Action:
+[`.github/workflows/paper-trading.yml`](../../.github/workflows/paper-trading.yml),
+daily at 06:15 UTC, committing the journal to [`paper/`](../../paper/).
+
+**It does nothing until this branch is merged to `main`** — GitHub only runs
+scheduled workflows from the default branch. After merging, trigger it once by
+hand from the Actions tab to confirm it works rather than waiting for tomorrow.
+
+Running it there rather than on a machine you own is the point: a track record
+that lives on one laptop ends the first time that laptop is rebuilt, and
+committing every entry makes the append-only property real rather than
+aspirational. An entry cannot be quietly revised without the revision itself
+being a commit — which is the whole defence against a record that improves in
+hindsight.
+
+Two things to know about GitHub's scheduler: it delays jobs under load and
+occasionally drops one entirely. That costs nothing here — the loop is
+idempotent and resolves whatever it missed next time. It also disables
+scheduled workflows after 60 days of repository inactivity, so a long quiet
+spell needs a click to re-enable.
+
+If you would rather run it on a box you control — cron on a VPS:
+
 ```
-0 6 * * *  cd /path/to/repo && python -m services.decisions run >> paper.log
+15 6 * * *  cd /path/to/repo && /usr/bin/python3 -m services.decisions run --home paper >> paper.log 2>&1
 ```
+
+systemd, if you want the run to survive a machine that was asleep at 06:15
+(`Persistent=true` catches up on boot, which plain cron does not):
+
+```ini
+# ~/.config/systemd/user/paper.service
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/repo
+ExecStart=/usr/bin/python3 -m services.decisions run --home paper
+
+# ~/.config/systemd/user/paper.timer
+[Timer]
+OnCalendar=*-*-* 06:15:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user enable --now paper.timer
+```
+
+Windows Task Scheduler:
+
+```powershell
+schtasks /create /tn "paper trading" /sc daily /st 08:15 `
+  /tr "cmd /c cd /d C:\path\to\repo && python -m services.decisions run --home paper >> paper.log 2>&1"
+```
+
+Whichever you pick, run exactly one of them. Two schedulers writing the same
+journal will each see an unemitted day and each emit it.
 
 One run does two things **in this order**: resolve every decision whose horizon
 has elapsed, then emit today's. A decision written today cannot see an outcome
@@ -355,6 +412,10 @@ can hide behind the other.
   pending. Pending is an honest state; scoring against whatever bar happened to
   be next is not. A Friday call on an equity is judged on Monday, and that date
   is recorded.
+- **Score against a bar that has not closed either.** The mirror of the first
+  rule, and the one that actually bit during setup: resolving yesterday's call
+  against today's live price books a partial day as a full day, biased in
+  whichever direction the market happens to be moving when cron fires.
 - **Run without baselines.** `AlwaysLong` and a date-seeded `Coinflip` ship in
   the defaults. The coin flip cannot be re-rolled, because re-rolling a
   baseline until it looks bad is the same cheat as re-rolling a strategy until
@@ -405,7 +466,7 @@ same file as a forward record would be indistinguishable to the guard.
 pytest services/decisions/tests -q
 ```
 
-110 tests, no network, no credentials, no dependencies — the real-data examples
+112 tests, no network, no credentials, no dependencies — the real-data examples
 read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a

@@ -299,3 +299,36 @@ def test_status_names_the_baselines_and_the_correlation_caveat(tmp_path: Path):
     assert "Against the baselines:" in text
     assert "correlated" in text
     assert "Calibration:" in text
+
+
+def test_an_outcome_is_never_taken_from_an_unclosed_bar(tmp_path: Path):
+    """The mirror of the emission rule. Scoring yesterday's call against
+    today's live price books a partial day as a full day, biased in whichever
+    direction the market happens to be moving when cron fires."""
+    series = ramp(30)
+    journal, register, universe = fixture(tmp_path, series)
+    yesterday, today = series.dates[-2], series.dates[-1]
+
+    emit(journal, universe, [AlwaysLong()], register, today=yesterday)
+    assert journal.decisions()[0].meta["as_of"] == series.dates[-3]
+
+    # The bar that would settle it is today's, which has not closed.
+    resolved, _ = resolve(journal, universe, today=yesterday)
+    assert resolved == 0
+
+    # Once it closes, the same call resolves.
+    resolved, _ = resolve(journal, universe, today=today)
+    assert resolved == 1
+
+
+def test_run_once_passes_its_clock_to_resolution(tmp_path: Path):
+    series = ramp(30)
+    journal, register, universe = fixture(tmp_path, series)
+
+    run_once(journal, universe, [AlwaysLong()], register, today=series.dates[-2])
+    same_day = run_once(
+        journal, universe, [AlwaysLong()], register, today=series.dates[-2]
+    )
+
+    assert same_day.resolved == 0, "resolved against a bar that had not closed"
+    assert same_day.still_pending == 1

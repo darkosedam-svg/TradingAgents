@@ -31,17 +31,27 @@ def _paths(home: Path) -> tuple[DecisionJournal, TrialRegister]:
     return DecisionJournal(home / "decisions.jsonl"), TrialRegister(home / "trials.jsonl")
 
 
-def _universe(symbols: list[str]) -> dict:
+def _universe(symbols: list[str], home: Path) -> dict:
+    """Load from the runner's own price cache, falling back to the committed
+    snapshot on a first offline run."""
+    cache = home / "prices"
     universe = {}
     for symbol in symbols:
-        series = load_series(symbol)
+        root = cache if (cache / f"kraken_{symbol}_usd_daily.csv").exists() else None
+        series = load_series(symbol, root=root)
         universe[f"{series.symbol}-USD"] = series
     return universe
 
 
-def _refresh(symbols: list[str]) -> None:
-    """Pull today's bars. Kept out of the library so the loop itself never
-    depends on the network — an offline run still resolves and still scores."""
+def _refresh(symbols: list[str], home: Path) -> None:
+    """Pull today's bars into the runner's own cache.
+
+    Two reasons this does not write to ``services/decisions/data``: the loop
+    should never depend on the network to resolve and score what it already
+    has, and that directory is a fixed snapshot the README quotes figures from.
+    A daily job quietly rewriting a few of its files would leave the prose
+    describing a dataset that no longer exists.
+    """
     from .data.fetch import MEME_PAIRS, PAIRS, fetch_ohlc
 
     known = {**PAIRS, **MEME_PAIRS}
@@ -49,7 +59,7 @@ def _refresh(symbols: list[str]) -> None:
         if symbol not in known:
             print(f"  {symbol}: no Kraken pair configured, skipping refresh")
             continue
-        fetch_ohlc(symbol, known[symbol])
+        fetch_ohlc(symbol, known[symbol], dest=home / "prices")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,9 +97,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.offline:
         print("refreshing prices:")
-        _refresh(args.symbols)
+        _refresh(args.symbols, args.home)
 
-    universe = _universe(args.symbols)
+    universe = _universe(args.symbols, args.home)
     strategies = default_strategies()
 
     if args.command == "backfill":

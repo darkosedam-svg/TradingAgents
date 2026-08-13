@@ -178,6 +178,7 @@ def resolve(
     universe: dict[str, Series],
     *,
     horizon_days: int = HORIZON_DAYS,
+    today: Optional[str] = None,
 ) -> tuple[int, list[str]]:
     """Record the outcome of every decision whose horizon has elapsed.
 
@@ -185,7 +186,13 @@ def resolve(
     means the decision stays pending rather than being scored against the wrong
     day. Pending is an honest state; silently scoring against whatever bar
     happened to be next is not.
+
+    An outcome is only taken from a bar that has *closed*. Today's candle is a
+    live price, and scoring yesterday's call against it books a partial day's
+    move as a full day's result — a bias that runs in whichever direction the
+    market happens to be going at the moment cron fires.
     """
+    cutoff = today or datetime.now(timezone.utc).date().isoformat()
     resolved = 0
     stuck: list[str] = []
     for decision in journal.pending():
@@ -196,8 +203,8 @@ def resolve(
             continue
         due = (date.fromisoformat(as_of) + timedelta(days=horizon_days)).isoformat()
         judged = series.first_close_on_or_after(due)
-        if judged is None:
-            continue  # not yet; try again next run
+        if judged is None or judged[0] >= cutoff:
+            continue  # not yet, or not yet closed; try again next run
         judged_on, exit_close = judged
         journal.record_outcome(
             Realisation(
@@ -292,7 +299,7 @@ def run_once(
     report = RunReport(as_of=max(closed) if closed else "no closed bar yet")
 
     report.resolved, report.unresolvable = resolve(
-        journal, universe, horizon_days=horizon_days
+        journal, universe, horizon_days=horizon_days, today=today
     )
     if closed and (force or not already_ran(journal, report.as_of)):
         report.emitted, report.abstained = emit(

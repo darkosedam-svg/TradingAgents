@@ -176,10 +176,16 @@ def _read(path: Path, symbol: str, domain: Domain, periods: int) -> Series:
     )
 
 
-def load_series(symbol: str) -> Series:
-    """A Kraken crypto pair — the majors and the memecoins share a format."""
+def load_series(symbol: str, *, root: Optional[Path] = None) -> Series:
+    """A Kraken crypto pair — the majors and the memecoins share a format.
+
+    ``root`` defaults to the committed snapshot. The paper runner keeps its own
+    freshly-fetched copy elsewhere, so daily operation never edits the dataset
+    the examples are documented against.
+    """
     domain = Domain.MEME if symbol in MEMECOINS else Domain.CRYPTO
-    return _read(DATA / f"kraken_{symbol}_usd_daily.csv", symbol.upper(), domain, 365)
+    base = DATA if root is None else Path(root)
+    return _read(base / f"kraken_{symbol}_usd_daily.csv", symbol.upper(), domain, 365)
 
 
 def load_equity(ticker: str) -> Series:

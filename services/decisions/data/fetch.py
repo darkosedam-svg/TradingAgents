@@ -112,7 +112,15 @@ def _get(url: str, *, retries: int = 3) -> Any:
 # ----------------------------------------------------------------- crypto OHLC
 
 
-def fetch_ohlc(name: str, pair: str) -> Path:
+def fetch_ohlc(name: str, pair: str, *, dest: Optional[Path] = None) -> Path:
+    """Daily bars for one Kraken pair.
+
+    ``dest`` defaults to the committed snapshot the examples read. The paper
+    runner passes its own directory instead: that snapshot is a fixed dataset
+    the README and the evidence review quote figures from, and refreshing a few
+    of its files on a daily schedule would leave the prose silently describing
+    a dataset that no longer exists.
+    """
     payload = _get(KRAKEN_OHLC.format(pair=pair))
     if payload.get("error"):
         raise RuntimeError(f"kraken error for {pair}: {payload['error']}")
@@ -120,7 +128,9 @@ def fetch_ohlc(name: str, pair: str) -> Path:
     key = next(k for k in result if k != "last")
     rows = result[key]
 
-    path = HERE / f"kraken_{name}_usd_daily.csv"
+    root = HERE if dest is None else Path(dest)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"kraken_{name}_usd_daily.csv"
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["date", "open", "high", "low", "close", "volume"])
