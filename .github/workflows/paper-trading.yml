@@ -47,6 +47,11 @@ jobs:
       SYMBOLS: ${{ inputs.symbols || 'btc eth sol' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history. The default shallow clone can make the rebase below
+          # fail across the shallow boundary if main moved mid-run, and the
+          # cost of finding that out is a day missing from the record.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
