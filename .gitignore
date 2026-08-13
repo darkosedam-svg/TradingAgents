@@ -24,6 +24,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.whl
 MANIFEST
 
 # PyInstaller
@@ -217,3 +218,15 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# Triage inference layer: eval runs and shadow logs are local artifacts
+eval-results/
+
+# Local paper-trading runs. The canonical record lives in paper/ and is
+# committed by the scheduled job; this is where you experiment without
+# polluting it.
+data/paper/
+
+# The runner refetches prices every day. The journals next to it are the
+# record worth keeping; a 200KB CSV rewritten daily is not.
+paper/prices/

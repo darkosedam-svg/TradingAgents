@@ -1,0 +1,87 @@
+# The daily paper-trading loop. Resolves every decision whose horizon has
+# elapsed, emits today's, commits the journal.
+#
+# Why here rather than a laptop: the journal is the whole point, and a track
+# record that lives on one machine is a track record that ends the first time
+# that machine is rebuilt. Committing it makes the append-only property real
+# rather than aspirational — every entry is a signed commit with a timestamp
+# nobody can quietly rewrite.
+#
+# NOTE: scheduled workflows only run from the repository's default branch.
+# This file does nothing until it is merged to main.
+
+name: paper trading
+
+# Quoted: bare `on` is boolean true under YAML 1.1. GitHub tolerates it,
+# every other YAML tool does not.
+"on":
+  schedule:
+    # 06:15 UTC. Kraken's daily bar closes at 00:00 UTC, so yesterday is
+    # definitely settled by now. GitHub delays scheduled jobs under load and
+    # occasionally skips them; the loop is idempotent and resolves whatever it
+    # missed on the next run, so a late or dropped day costs nothing.
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Kraken symbols to trade on paper"
+        default: "btc eth sol"
+
+# One run at a time. Two concurrent runs would both read the journal, both
+# decide nothing had been emitted yet, and both emit.
+concurrency:
+  group: paper-trading
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Via the environment, never interpolated straight into a shell command:
+      # `${{ }}` inside `run:` is pasted as text, so a dispatch input could
+      # carry anything a shell would honour.
+      SYMBOLS: ${{ inputs.symbols || 'btc eth sol' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The package is stdlib-only; pytest is the only thing to install.
+      - name: Check the loop before it writes anything
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest services/decisions/tests/test_paper.py -q
+        # The journal is append-only, so a bad entry cannot be cleanly removed
+        # later. Cheaper to fail here than to explain a corrupted record.
+
+      - name: Run the loop
+        run: python -m services.decisions run --home paper --symbols $SYMBOLS
+
+      - name: Commit the journal
+        run: |
+          git config user.name "paper-trading"
+          git config user.email "paper-trading@users.noreply.github.com"
+          git add paper/
+          if git diff --cached --quiet; then
+            echo "nothing to commit — the loop ran and had nothing new to say"
+            exit 0
+          fi
+          git commit -m "paper: $(date -u +%Y-%m-%d) [skip ci]"
+          # Someone may have pushed since checkout; rebase rather than fail.
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep $((attempt * 5))
+          done
+          echo "could not push the journal after 3 attempts" >&2
+          exit 1
+
+      - name: Report
+        if: always()
+        run: python -m services.decisions status --home paper >> "$GITHUB_STEP_SUMMARY"

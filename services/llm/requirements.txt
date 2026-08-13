@@ -1,0 +1,5 @@
+# Runtime dependencies for the local inference layer.
+# Deliberately minimal: the layer talks HTTP to an OpenAI-compatible endpoint,
+# so it needs a client and a validator and nothing else.
+httpx>=0.27
+pydantic>=2.7

@@ -1,0 +1,3 @@
+{"trial_id": "703958e0a70048b9b402151d703aa593", "strategy_id": "sma-20-50", "description": "SMA 20/50 crossover, daily close, 1-day horizon", "ts": "2026-08-13T17:06:00+00:00"}
+{"trial_id": "85ae0a5539674659bc29bb1b77c6ed61", "strategy_id": "baseline-hold", "description": "always long, no view at all", "ts": "2026-08-13T17:06:00+00:00"}
+{"trial_id": "fae15c14571d4229be553211ad421709", "strategy_id": "baseline-coinflip", "description": "fair coin, seeded by date", "ts": "2026-08-13T17:06:00+00:00"}
