@@ -372,6 +372,17 @@ schtasks /create /tn "paper trading" /sc daily /st 08:15 `
 Whichever you pick, run exactly one of them. Two schedulers writing the same
 journal will each see an unemitted day and each emit it.
 
+To rehearse the job without waiting a day, or to catch up a run the scheduler
+dropped:
+
+```bash
+python -m services.decisions run --home paper --today 2026-08-12
+```
+
+`--today` moves the line between a closed bar and a live one, so a future date
+is refused: it would write decisions against prices nobody could have traded,
+and the record has no way to tell that apart afterwards.
+
 One run does two things **in this order**: resolve every decision whose horizon
 has elapsed, then emit today's. A decision written today cannot see an outcome
 recorded in the same pass — structural, not careful.
@@ -466,7 +477,7 @@ same file as a forward record would be indistinguishable to the guard.
 pytest services/decisions/tests -q
 ```
 
-112 tests, no network, no credentials, no dependencies — the real-data examples
+122 tests, no network, no credentials, no dependencies — the real-data examples
 read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a

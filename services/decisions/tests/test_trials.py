@@ -288,3 +288,22 @@ def test_a_persisted_register_reloads_every_trial(tmp_path):
     # And it keeps appending rather than starting over.
     reloaded.register("grid", "cell 4")
     assert TrialRegister(path).count == 5
+
+
+def test_a_single_observation_does_not_crash_the_guard():
+    """Day two of paper-trading one instrument. A deflated Sharpe cannot be
+    computed from one point, and a guard that raised there would break exactly
+    when it starts being used."""
+    guard = OverfittingGuard()
+    verdict = guard.evaluate(0.5, n_observations=1, n_trials=1)
+
+    assert not verdict.passed
+    assert verdict.dsr == 0.0
+    assert "too few observations" in verdict.reason
+    assert "FAIL" in verdict.report()
+
+
+def test_an_empty_sample_is_refused_rather_than_guessed():
+    guard = OverfittingGuard(min_observations=0)
+    verdict = guard.evaluate(0.5, n_observations=1, n_trials=1)
+    assert not verdict.passed, "one point is never enough, whatever min_observations says"
