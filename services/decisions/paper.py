@@ -34,9 +34,10 @@ import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import fmean
 from typing import Iterable, Optional, Protocol, Sequence
 
-from .journal import DecisionJournal
+from .journal import DecisionJournal, Pair
 from .prices import Series, compounded, sharpe
 from .record import Decision, Realisation, Side
 from .scoring import by_strategy, calibration, overall
@@ -369,6 +370,27 @@ def backfill(
 # ---------------------------------------------------------------- the report
 
 
+def _day_of(pair: Pair) -> str:
+    """The day a decision was made. `meta["as_of"]` is the bar it traded off;
+    the timestamp is the fallback for journals not written by this runner."""
+    return (pair.decision.meta or {}).get("as_of") or pair.decision.ts[:10]
+
+
+def portfolio_return(pairs: Sequence[Pair]) -> float:
+    """Compounded return of holding every instrument equally, rebalanced daily.
+
+    Not the same as compounding the raw return list. Three instruments traded
+    on the same day produce three returns, and chaining them multiplies as if
+    they had happened one after another — which turned a real +35% fortnight
+    into a reported +144%. Averaging within the day first is what "you held
+    all three" actually means.
+    """
+    by_day: dict[str, list[float]] = {}
+    for pair in pairs:
+        by_day.setdefault(_day_of(pair), []).append(pair.signed_return)
+    return compounded([fmean(day) for _, day in sorted(by_day.items())])
+
+
 def status(
     journal: DecisionJournal,
     register: TrialRegister,
@@ -387,6 +409,9 @@ def status(
 
     baselines = set(baseline_ids)
     scores = by_strategy(pairs)
+    by_name: dict[str, list[Pair]] = {}
+    for pair in pairs:
+        by_name.setdefault(pair.decision.strategy_id, []).append(pair)
     guard = OverfittingGuard(register, min_dsr=min_dsr)
     # These are per-observation Sharpes, so the paper's annualised default of
     # 1.0 would reject everything. There is no grid to measure here, so use the
@@ -399,7 +424,7 @@ def status(
         f"{total.n} scored decisions, {len(journal.pending())} pending",
         f"registered trials: {register.count}",
         "",
-        f"{'strategy':<22} {'n':>5} {'hit':>7} {'sharpe':>8} {'total':>9} {'DSR':>7}",
+        f"{'strategy':<22} {'n':>5} {'hit':>7} {'sharpe':>8} {'return':>9} {'DSR':>7}",
     ]
     verdicts: dict[str, Verdict] = {}
     for name, score in scores.items():
@@ -419,7 +444,7 @@ def status(
         )
         lines.append(
             f"{name:<22} {score.n:>5} {score.hit_rate:>6.1%} {score.sharpe:>+8.4f} "
-            f"{compounded(score.returns):>+8.1%} {dsr}{mark}"
+            f"{portfolio_return(by_name[name]):>+8.1%} {dsr}{mark}"
         )
 
     real = {n: s for n, s in scores.items() if n not in baselines}
@@ -470,6 +495,10 @@ def status(
         "  Watch that first number over weeks. Growing means the system is",
         "  learning to sound certain rather than to be right.",
         "",
+        "return = equal-weighted across instruments, rebalanced daily — not the",
+        "raw returns chained, which would compound parallel days as if they ran",
+        "one after another.",
+        "",
         "Caveat: trading several instruments on the same days pools correlated",
         "observations, so n overstates how much independent evidence you have.",
         "The DSR column is optimistic by an amount this does not measure.",
@@ -486,6 +515,7 @@ __all__ = [
     "Signal",
     "Strategy",
     "already_ran",
+    "portfolio_return",
     "default_strategies",
     "emit",
     "resolve",
