@@ -477,7 +477,7 @@ same file as a forward record would be indistinguishable to the guard.
 pytest services/decisions/tests -q
 ```
 
-122 tests, no network, no credentials, no dependencies — the real-data examples
+125 tests, no network, no credentials, no dependencies — the real-data examples
 read committed CSVs, so the suite never touches the internet. Several assert
 architectural properties rather than behaviour — that `Decision` has no
 execution fields, that outcomes never appear in a decision row, that swapping a

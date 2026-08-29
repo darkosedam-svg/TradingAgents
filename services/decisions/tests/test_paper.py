@@ -17,11 +17,12 @@ from services.decisions.paper import (
     default_strategies,
     emit,
     resolve,
+    portfolio_return,
     run_once,
     status,
 )
-from services.decisions.prices import Series
-from services.decisions.record import Domain, Side
+from services.decisions.prices import Series, compounded
+from services.decisions.record import Decision, Domain, Realisation, Side
 from services.decisions.trials import TrialRegister
 
 
@@ -376,3 +377,65 @@ def test_the_cli_drives_the_loop_at_a_chosen_date(tmp_path: Path, monkeypatch):
     journal = DecisionJournal(tmp_path / "decisions.jsonl")
     assert len(journal.pairs()) == len(first), "the earlier day should now resolve"
     assert len(journal.pending()) == len(first), "and a new day should be pending"
+
+
+# ------------------------------------------------------------------ portfolio
+
+
+def test_parallel_instruments_are_not_compounded_as_if_sequential(tmp_path: Path):
+    """Three instruments traded the same day give three returns. Chaining them
+    multiplies as though they happened one after another — which turned a real
+    +35% fortnight into a reported +144%."""
+    journal = DecisionJournal(tmp_path / "d.jsonl")
+    for day in ("2026-01-01", "2026-01-02"):
+        for symbol in ("A-USD", "B-USD", "C-USD"):
+            made = journal.append(
+                Decision(
+                    domain=Domain.CRYPTO,
+                    instrument=symbol,
+                    side=Side.LONG,
+                    confidence=0.5,
+                    rationale="t",
+                    strategy_id="s",
+                    meta={"as_of": day, "close": 100.0},
+                )
+            )
+            journal.record_outcome(
+                Realisation(decision_id=made.decision_id, realised_return=0.10)
+            )
+
+    pairs = journal.pairs()
+    # Every instrument rose 10% on each of two days: the portfolio made 21%.
+    assert portfolio_return(pairs) == pytest.approx(0.21, abs=1e-9)
+    # Chaining all six returns would claim 77%.
+    assert compounded([p.signed_return for p in pairs]) == pytest.approx(
+        0.771561, abs=1e-6
+    )
+
+
+def test_a_single_instrument_is_unaffected(tmp_path: Path):
+    journal = DecisionJournal(tmp_path / "d.jsonl")
+    for day, r in (("2026-01-01", 0.10), ("2026-01-02", -0.05)):
+        made = journal.append(
+            Decision(
+                domain=Domain.CRYPTO, instrument="A-USD", side=Side.LONG,
+                confidence=0.5, rationale="t", strategy_id="s",
+                meta={"as_of": day, "close": 100.0},
+            )
+        )
+        journal.record_outcome(
+            Realisation(decision_id=made.decision_id, realised_return=r)
+        )
+
+    pairs = journal.pairs()
+    assert portfolio_return(pairs) == pytest.approx(compounded([0.10, -0.05]))
+
+
+def test_status_labels_the_column_as_a_portfolio_return(tmp_path: Path):
+    series = ramp(120)
+    journal, register, universe = fixture(tmp_path, series)
+    backfill(journal, universe, [AlwaysLong()], register, days=60)
+
+    text = status(journal, register)
+    assert "return" in text
+    assert "equal-weighted across instruments" in text
