@@ -29,7 +29,16 @@ from .journal import Pair
 
 @dataclass
 class Score:
-    """Performance of one slice of the journal."""
+    """Performance of one slice of the journal.
+
+    ``total_return`` is the **sum** of the signed returns, not a compounded
+    one. That is the right number when each decision is an independent unit
+    stake — $1 on each of 354 prediction markets, say — and the wrong number
+    for a portfolio held over time. Compounding this list would be wrong in a
+    second way whenever several instruments trade on the same day, since it
+    would chain parallel positions as if they had run one after another; see
+    :func:`services.decisions.paper.portfolio_return`.
+    """
 
     label: str
     n: int = 0
